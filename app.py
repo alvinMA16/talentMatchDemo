@@ -1,9 +1,30 @@
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
 import os
 import json
+import sqlite3
 import pathlib
 import google.generativeai as genai
 from dotenv import load_dotenv
+
+# --- Database Setup ---
+DATABASE = 'talent_match.db'
+
+def get_db_connection():
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    conn = get_db_connection()
+    with open('schema.sql', 'r') as f:
+        conn.executescript(f.read())
+    conn.close()
+    print("Database initialized.")
+
+# Call this function once to create your DB file and table
+def try_init_db():
+    if not os.path.exists(DATABASE):
+        init_db()
 
 # 加载环境变量
 load_dotenv()
@@ -33,6 +54,24 @@ def index():
 # Resume管理页面
 @app.route('/resume')
 def resume_management():
+    conn = get_db_connection()
+    resumes_from_db = conn.execute('SELECT * FROM resumes ORDER BY created_at DESC').fetchall()
+    conn.close()
+    
+    resumes = []
+    for r in resumes_from_db:
+        resume = dict(r)
+        # Safely parse JSON fields
+        try:
+            resume['experience'] = json.loads(r['experience_json']) if r['experience_json'] else []
+        except json.JSONDecodeError:
+            resume['experience'] = r['experience_json'] # Store as plain text if not valid JSON
+        try:
+            resume['education'] = json.loads(r['education_json']) if r['education_json'] else []
+        except json.JSONDecodeError:
+            resume['education'] = r['education_json']
+        resumes.append(resume)
+
     return render_template('resume.html', resumes=resumes)
 
 # JD管理页面
@@ -43,6 +82,24 @@ def jd_management():
 # 人岗匹配页面
 @app.route('/matching')
 def talent_matching():
+    conn = get_db_connection()
+    resumes_from_db = conn.execute('SELECT * FROM resumes ORDER BY created_at DESC').fetchall()
+    conn.close()
+
+    resumes = []
+    for r in resumes_from_db:
+        resume = dict(r)
+        # Safely parse JSON fields
+        try:
+            resume['experience'] = json.loads(r['experience_json']) if r['experience_json'] else []
+        except json.JSONDecodeError:
+            resume['experience'] = r['experience_json'] # Store as plain text if not valid JSON
+        try:
+            resume['education'] = json.loads(r['education_json']) if r['education_json'] else []
+        except json.JSONDecodeError:
+            resume['education'] = r['education_json']
+        resumes.append(resume)
+
     return render_template('matching.html', resumes=resumes, job_descriptions=job_descriptions, matches=matches)
 
 # API: 上传并解析简历
@@ -121,31 +178,59 @@ def upload_resume():
 def add_resume():
     data = request.get_json()
     if not data or 'name' not in data:
-        return jsonify({'status': 'error', 'message': '缺少必要字段'}), 400
+        return jsonify({'status': 'error', 'message': 'Missing required fields'}), 400
+
+    name = data.get('name')
+    email = data.get('email')
+    phone = data.get('phone')
+
+    conn = get_db_connection()
+
+    # Check for duplicates
+    query = "SELECT * FROM resumes WHERE name = ? OR (email != '' AND email = ?) OR (phone != '' AND phone = ?)"
+    existing = conn.execute(query, (name, email, phone)).fetchone()
     
-    resume = {
-        'id': len(resumes) + 1,
-        'name': data['name'],
-        'email': data.get('email', ''),
-        'phone': data.get('phone', ''),
-        'skills': data.get('skills', ''),
-        'experience': data.get('experience', ''),
-        'education': data.get('education', ''),
-        'summary': data.get('summary', '')
-    }
-    resumes.append(resume)
-    
+    if existing:
+        conn.close()
+        return jsonify({
+            'status': 'duplicate',
+            'message': f"A candidate with similar info already exists (ID: {existing['id']}, Name: {existing['name']}). Please review before adding another."
+        })
+
+    # Insert new resume
+    conn.execute(
+        """
+        INSERT INTO resumes (name, email, phone, skills, summary, experience_json, education_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            name,
+            email,
+            phone,
+            data.get('skills', ''),
+            data.get('summary', ''),
+            json.dumps(data.get('experience', [])),
+            json.dumps(data.get('education', []))
+        )
+    )
+    conn.commit()
+    new_resume_id = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+    new_resume = conn.execute('SELECT * FROM resumes WHERE id = ?', (new_resume_id,)).fetchone()
+    conn.close()
+
     return jsonify({
         'status': 'success',
         'message': '简历添加成功',
-        'resume': resume
+        'resume': dict(new_resume)
     })
 
 # API: 删除简历
 @app.route('/api/resume/<int:resume_id>', methods=['DELETE'])
 def delete_resume(resume_id):
-    global resumes
-    resumes = [r for r in resumes if r['id'] != resume_id]
+    conn = get_db_connection()
+    conn.execute('DELETE FROM resumes WHERE id = ?', (resume_id,))
+    conn.commit()
+    conn.close()
     return jsonify({'status': 'success', 'message': '简历删除成功'})
 
 # API: 添加职位描述
@@ -236,5 +321,6 @@ def not_found(error):
     return render_template('404.html'), 404
 
 if __name__ == '__main__':
+    try_init_db()
     # 开发环境运行配置
     app.run(debug=True, host='0.0.0.0', port=8000) 

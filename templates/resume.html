@@ -415,8 +415,10 @@ function addResume(resumeData) {
         if (data.status === 'success') {
             alert(data.message);
             location.reload();
+        } else if (data.status === 'duplicate') {
+            alert('操作提醒: ' + data.message);
         } else {
-            alert(data.message);
+            alert('添加失败: ' + data.message);
         }
     })
     .catch(error => {
