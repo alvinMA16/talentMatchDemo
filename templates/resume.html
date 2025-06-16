@@ -1,0 +1,492 @@
+{% extends "base.html" %}
+
+{% block title %}简历管理 - Talent Match{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-file-person me-2"></i>简历管理</h2>
+    <div>
+        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#uploadResumeModal">
+            <i class="bi bi-upload me-1"></i>上传简历
+        </button>
+        <button class="btn btn-secondary" data-bs-toggle="modal" data-bs-target="#addResumeModal">
+            <i class="bi bi-plus-circle me-1"></i>手动添加
+        </button>
+    </div>
+</div>
+
+<!-- 简历列表 -->
+<div class="row" id="resumeList">
+    {% if resumes %}
+        {% for resume in resumes %}
+        <div class="col-md-6 col-lg-4 mb-3">
+            <div class="card h-100">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0">{{ resume.name }}</h6>
+                    <button class="btn btn-sm btn-outline-danger" onclick="deleteResume({{ resume.id }})">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </div>
+                <div class="card-body d-flex flex-column">
+                    <p class="card-text">
+                        <small class="text-muted">
+                            <i class="bi bi-envelope me-1"></i>{{ resume.email or 'N/A' }}<br>
+                            <i class="bi bi-telephone me-1"></i>{{ resume.phone or 'N/A' }}
+                        </small>
+                    </p>
+                    {% if resume.experience and resume.experience is iterable and not resume.experience is string and resume.experience|length > 0 %}
+                        <p class="card-text mt-2"><strong>最新职位:</strong><br>{{ resume.experience[0].role or 'N/A' }}<br>at {{ resume.experience[0].company or 'N/A' }}</p>
+                    {% else %}
+                        <p class="card-text mt-2"><strong>经验:</strong> N/A</p>
+                    {% endif %}
+                    <div class="mt-auto pt-2">
+                         <button class="btn btn-sm btn-outline-primary" onclick="showResumeDetails(this)" data-resume='{{ resume | tojson | e }}'>
+                            <i class="bi bi-eye me-1"></i>查看详情
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    {% else %}
+        <div class="col-12">
+            <div class="text-center py-5">
+                <i class="bi bi-inbox display-1 text-muted"></i>
+                <h4 class="mt-3 text-muted">暂无简历</h4>
+                <p class="text-muted">点击右上角按钮添加或上传你的第一份简历</p>
+            </div>
+        </div>
+    {% endif %}
+</div>
+
+<!-- 上传简历模态框 -->
+<div class="modal fade" id="uploadResumeModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">上传并解析简历</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body small">
+                <div class="row">
+                    <!-- 左侧: 上传区域 -->
+                    <div class="col-md-5">
+                        <h6 class="mb-2"><i class="bi bi-file-earmark-arrow-up me-1"></i>步骤 1: 选择简历文件</h6>
+                        <p class="text-muted mt-0">选择一个PDF文件后将自动开始解析。</p>
+                        <div class="mb-2">
+                            <input class="form-control form-control-sm" type="file" id="resumeFile" accept=".pdf">
+                        </div>
+                        <div id="pdf-preview-container" class="border bg-light d-flex align-items-center justify-content-center" style="height: 620px;">
+                            <p id="pdf-preview-placeholder" class="text-muted">PDF 预览</p>
+                            <canvas id="pdf-canvas" style="display: none; max-width: 100%; max-height: 100%;"></canvas>
+                        </div>
+                        <div id="uploadSpinner" class="text-center mt-2 d-none">
+                            <div class="spinner-border spinner-border-sm text-primary" role="status">
+                                <span class="visually-hidden">解析中...</span>
+                            </div>
+                            <p class="mb-0">AI正在解析您的简历，请稍候...</p>
+                        </div>
+                    </div>
+                    <!-- 右侧: 解析结果 -->
+                    <div class="col-md-7">
+                        <h6 class="mb-2"><i class="bi bi-card-text me-1"></i>步骤 2: 核对并保存信息</h6>
+                        <form id="parsedResumeForm">
+                            <div class="row">
+                                <div class="col-md-4 mb-2">
+                                    <label class="form-label">姓名 *</label>
+                                    <input type="text" class="form-control form-control-sm" id="parsedResumeName" required>
+                                </div>
+                                <div class="col-md-4 mb-2">
+                                    <label class="form-label">邮箱</label>
+                                    <input type="email" class="form-control form-control-sm" id="parsedResumeEmail">
+                                </div>
+                                <div class="col-md-4 mb-2">
+                                    <label class="form-label">电话</label>
+                                    <input type="tel" class="form-control form-control-sm" id="parsedResumePhone">
+                                </div>
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label">个人简介</label>
+                                <textarea class="form-control form-control-sm" id="parsedResumeSummary" rows="3"></textarea>
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label">教育背景</label>
+                                <textarea class="form-control form-control-sm" id="parsedResumeEducation" rows="4"></textarea>
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label">工作经验</label>
+                                <textarea class="form-control form-control-sm" id="parsedResumeExperience" rows="8"></textarea>
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label">技能</label>
+                                <textarea class="form-control form-control-sm" id="parsedResumeSkills" rows="3"></textarea>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                <button type="button" class="btn btn-primary" onclick="saveParsedResume()">
+                    <i class="bi bi-save me-1"></i>保存简历
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 手动添加简历模态框 -->
+<div class="modal fade" id="addResumeModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">添加简历</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="addResumeForm">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="resumeName" class="form-label">姓名 *</label>
+                                <input type="text" class="form-control" id="resumeName" required>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="resumeEmail" class="form-label">邮箱</label>
+                                <input type="email" class="form-control" id="resumeEmail">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="resumePhone" class="form-label">电话</label>
+                                <input type="tel" class="form-control" id="resumePhone">
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="resumeEducation" class="form-label">教育背景</label>
+                                <input type="text" class="form-control" id="resumeEducation">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="resumeSkills" class="form-label">技能</label>
+                        <textarea class="form-control" id="resumeSkills" rows="2" placeholder="请输入技能，用逗号分隔"></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label for="resumeExperience" class="form-label">工作经验</label>
+                        <textarea class="form-control" id="resumeExperience" rows="3" placeholder="请描述工作经验"></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label for="resumeSummary" class="form-label">个人简介</label>
+                        <textarea class="form-control" id="resumeSummary" rows="2" placeholder="请输入个人简介"></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="addManualResume()">
+                    <i class="bi bi-plus-circle me-1"></i>添加简历
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 简历详情模态框 -->
+<div class="modal fade" id="resumeDetailsModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="detailsName"></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="detailsContact" class="mb-3 text-muted"></div>
+                <hr>
+                <h6><i class="bi bi-person-badge me-2"></i>个人简介</h6>
+                <p id="detailsSummary" class="bg-light p-2 rounded"></p>
+                
+                <h6 class="mt-4"><i class="bi bi-building me-2"></i>工作经验</h6>
+                <div id="detailsExperience"></div>
+                
+                <h6 class="mt-4"><i class="bi bi-book me-2"></i>教育背景</h6>
+                <div id="detailsEducation"></div>
+
+                <h6 class="mt-4"><i class="bi bi-tools me-2"></i>技能</h6>
+                <p id="detailsSkills" class="bg-light p-2 rounded"></p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://mozilla.github.io/pdf.js/build/pdf.mjs" type="module"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    document.getElementById('resumeFile').addEventListener('change', function(event) {
+        if (event.target.files.length > 0) {
+            const file = event.target.files[0];
+            uploadAndParseResume(file);
+            renderPdfPreview(file);
+        }
+    });
+});
+
+// 渲染PDF预览
+async function renderPdfPreview(file) {
+    const { pdfjsLib } = globalThis;
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://mozilla.github.io/pdf.js/build/pdf.worker.mjs`;
+
+    const previewContainer = document.getElementById('pdf-preview-container');
+    const canvas = document.getElementById('pdf-canvas');
+    const placeholder = document.getElementById('pdf-preview-placeholder');
+    const ctx = canvas.getContext('2d');
+    
+    placeholder.style.display = 'none';
+    canvas.style.display = 'none';
+
+    const fileReader = new FileReader();
+    fileReader.onload = async function() {
+        const typedarray = new Uint8Array(this.result);
+        try {
+            const pdf = await pdfjsLib.getDocument({ data: typedarray }).promise;
+            const page = await pdf.getPage(1);
+            
+            // Scale to fit width
+            const viewport = page.getViewport({ scale: 1.0 });
+            const scale = previewContainer.clientWidth / viewport.width;
+            const scaledViewport = page.getViewport({ scale: scale });
+
+            canvas.height = scaledViewport.height;
+            canvas.width = scaledViewport.width;
+            
+            const renderContext = {
+                canvasContext: ctx,
+                viewport: scaledViewport
+            };
+            await page.render(renderContext).promise;
+            canvas.style.display = 'block';
+        } catch (error) {
+            console.error('Error rendering PDF:', error);
+            placeholder.innerText = '无法预览PDF';
+            placeholder.style.display = 'block';
+        }
+    };
+    fileReader.readAsArrayBuffer(file);
+}
+
+// 上传并解析简历
+function uploadAndParseResume(file) {
+    const spinner = document.getElementById('uploadSpinner');
+
+    if (!file) {
+        alert('请先选择一个PDF文件');
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('resume_file', file);
+
+    spinner.classList.remove('d-none');
+
+    fetch('/api/resume/upload', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        spinner.classList.add('d-none');
+        if (data.status === 'success') {
+            alert(data.message);
+            // Store the original structured data on the form
+            document.getElementById('parsedResumeForm').dataset.resumeData = JSON.stringify(data.data);
+            fillResumeForm(data.data);
+        } else {
+            alert('解析失败: ' + data.message);
+        }
+    })
+    .catch(error => {
+        spinner.classList.add('d-none');
+        alert('上传失败: ' + error.message);
+    });
+}
+
+function formatArray(arr, formatter) {
+    if (!arr) return '';
+    if (typeof arr === 'string') return arr; // Handle cases where AI returns a string
+    if (!Array.isArray(arr)) return JSON.stringify(arr, null, 2);
+
+    return arr.map(formatter).join('\n\n');
+}
+
+function formatExperience(exp) {
+    if (typeof exp !== 'object' || exp === null) return exp;
+    let parts = [];
+    if (exp.role) parts.push(`- **${exp.role}** at ${exp.company || 'N/A'} (${exp.dates || 'N/A'})`);
+    if (exp.description) parts.push(`  ${exp.description}`);
+    return parts.join('\n');
+}
+
+function formatEducation(edu) {
+    if (typeof edu !== 'object' || edu === null) return edu;
+    let parts = [];
+    if (edu.degree) parts.push(`- **${edu.degree}** from ${edu.institution || 'N/A'} (${edu.dates || 'N/A'})`);
+    return parts.join('\n');
+}
+
+function fillResumeForm(resumeData) {
+    document.getElementById('parsedResumeName').value = resumeData.name || '';
+    document.getElementById('parsedResumeEmail').value = resumeData.email || '';
+    document.getElementById('parsedResumePhone').value = resumeData.phone || '';
+    document.getElementById('parsedResumeSkills').value = Array.isArray(resumeData.skills) ? resumeData.skills.join(', ') : resumeData.skills || '';
+    document.getElementById('parsedResumeExperience').value = formatArray(resumeData.experience, formatExperience);
+    document.getElementById('parsedResumeEducation').value = formatArray(resumeData.education, formatEducation);
+    document.getElementById('parsedResumeSummary').value = resumeData.summary || '';
+}
+
+// 保存从PDF解析的简历
+function saveParsedResume() {
+    // Retrieve the original structured data
+    const storedData = document.getElementById('parsedResumeForm').dataset.resumeData;
+    if (!storedData) {
+        alert("没有可保存的解析数据。请先上传并解析一份简历。");
+        return;
+    }
+    
+    const resumeData = JSON.parse(storedData);
+
+    // Update with any simple edits from the form
+    resumeData.name = document.getElementById('parsedResumeName').value;
+    resumeData.email = document.getElementById('parsedResumeEmail').value;
+    resumeData.phone = document.getElementById('parsedResumePhone').value;
+    resumeData.summary = document.getElementById('parsedResumeSummary').value;
+    resumeData.skills = document.getElementById('parsedResumeSkills').value;
+    // For now, we don't support editing complex fields (experience, education) via the textarea.
+    // The original structured data for these fields is preserved.
+    
+    if (!resumeData.name.trim()) {
+        alert('请输入姓名');
+        return;
+    }
+
+    addResume(resumeData); // Send the full structured object
+}
+
+// 手动添加简历
+function addManualResume() {
+    const formData = {
+        name: document.getElementById('resumeName').value,
+        email: document.getElementById('resumeEmail').value,
+        phone: document.getElementById('resumePhone').value,
+        skills: document.getElementById('resumeSkills').value,
+        experience: document.getElementById('resumeExperience').value,
+        education: document.getElementById('resumeEducation').value,
+        summary: document.getElementById('resumeSummary').value
+    };
+    
+    if (!formData.name.trim()) {
+        alert('请输入姓名');
+        return;
+    }
+
+    addResume(formData);
+}
+
+// 通用的添加简历函数
+function addResume(resumeData) {
+    fetch('/api/resume', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(resumeData)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            alert(data.message);
+            location.reload();
+        } else {
+            alert(data.message);
+        }
+    })
+    .catch(error => {
+        alert('添加失败：' + error.message);
+    });
+}
+
+// 删除简历
+function deleteResume(resumeId) {
+    if (confirm('确定要删除这份简历吗？')) {
+        fetch(`/api/resume/${resumeId}`, {
+            method: 'DELETE'
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                alert(data.message);
+                location.reload();
+            } else {
+                alert(data.message);
+            }
+        })
+        .catch(error => {
+            alert('删除失败：' + error.message);
+        });
+    }
+}
+
+// 显示简历详情
+function showResumeDetails(button) {
+    const resume = JSON.parse(button.dataset.resume);
+    
+    // Populate simple fields
+    document.getElementById('detailsName').innerText = resume.name || 'N/A';
+    document.getElementById('detailsContact').innerHTML = `
+        <i class="bi bi-envelope me-1"></i> ${resume.email || 'N/A'} <br>
+        <i class="bi bi-telephone me-1"></i> ${resume.phone || 'N/A'}
+    `;
+    document.getElementById('detailsSummary').innerText = resume.summary || 'N/A';
+    document.getElementById('detailsSkills').innerText = resume.skills || 'N/A';
+
+    // Format and populate experience
+    const expContainer = document.getElementById('detailsExperience');
+    if (resume.experience && Array.isArray(resume.experience)) {
+        expContainer.innerHTML = resume.experience.map(exp => `
+            <div class="mb-3 p-2 border-start border-4 border-secondary">
+                <h6 class="mb-0">${exp.role || 'N/A'}</h6>
+                <p class="mb-1 text-primary">${exp.company || 'N/A'} (${exp.dates || 'N/A'})</p>
+                <p class="mb-0 small text-muted">${exp.description || ''}</p>
+            </div>
+        `).join('');
+    } else {
+        expContainer.innerHTML = `<p>${resume.experience || 'N/A'}</p>`;
+    }
+
+    // Format and populate education
+    const eduContainer = document.getElementById('detailsEducation');
+    if (resume.education && Array.isArray(resume.education)) {
+         eduContainer.innerHTML = resume.education.map(edu => `
+            <div class="mb-2 p-2">
+                <h6 class="mb-0">${edu.degree || 'N/A'}</h6>
+                <p class="mb-0 small text-muted">${edu.institution || 'N/A'} (${edu.dates || 'N/A'})</p>
+            </div>
+        `).join('');
+    } else {
+        eduContainer.innerHTML = `<p>${resume.education || 'N/A'}</p>`;
+    }
+
+    const modal = new bootstrap.Modal(document.getElementById('resumeDetailsModal'));
+    modal.show();
+}
+</script>
+{% endblock %} 
