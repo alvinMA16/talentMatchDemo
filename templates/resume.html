@@ -286,17 +286,15 @@ async function renderPdfPreview(file) {
 
 // 上传并解析简历
 function uploadAndParseResume(file) {
-    const spinner = document.getElementById('uploadSpinner');
-
     if (!file) {
-        alert('请先选择一个PDF文件');
+        showToast('请先选择一个PDF文件', 'warning');
         return;
     }
 
     const formData = new FormData();
     formData.append('resume_file', file);
 
-    spinner.classList.remove('d-none');
+    const parsingToast = showToast('AI正在解析简历...', 'primary', 0); // Show indefinitely
 
     fetch('/api/resume/upload', {
         method: 'POST',
@@ -304,19 +302,19 @@ function uploadAndParseResume(file) {
     })
     .then(response => response.json())
     .then(data => {
-        spinner.classList.add('d-none');
+        parsingToast.hide(); // Hide the parsing message
         if (data.status === 'success') {
-            alert(data.message);
+            showToast(data.message, 'success');
             // Store the original structured data on the form
             document.getElementById('parsedResumeForm').dataset.resumeData = JSON.stringify(data.data);
             fillResumeForm(data.data);
         } else {
-            alert('解析失败: ' + data.message);
+            showToast('解析失败: ' + data.message, 'danger');
         }
     })
     .catch(error => {
-        spinner.classList.add('d-none');
-        alert('上传失败: ' + error.message);
+        parsingToast.hide();
+        showToast('上传失败: ' + error.message, 'danger');
     });
 }
 
@@ -358,7 +356,7 @@ function saveParsedResume() {
     // Retrieve the original structured data
     const storedData = document.getElementById('parsedResumeForm').dataset.resumeData;
     if (!storedData) {
-        alert("没有可保存的解析数据。请先上传并解析一份简历。");
+        showToast("没有可保存的解析数据。", 'warning');
         return;
     }
     
@@ -374,7 +372,7 @@ function saveParsedResume() {
     // The original structured data for these fields is preserved.
     
     if (!resumeData.name.trim()) {
-        alert('请输入姓名');
+        showToast('请输入姓名', 'warning');
         return;
     }
 
@@ -394,7 +392,7 @@ function addManualResume() {
     };
     
     if (!formData.name.trim()) {
-        alert('请输入姓名');
+        showToast('请输入姓名', 'warning');
         return;
     }
 
@@ -413,16 +411,16 @@ function addResume(resumeData) {
     .then(response => response.json())
     .then(data => {
         if (data.status === 'success') {
-            alert(data.message);
-            location.reload();
+            showToast(data.message, 'success');
+            setTimeout(() => location.reload(), 1000);
         } else if (data.status === 'duplicate') {
-            alert('操作提醒: ' + data.message);
+            showToast(data.message, 'warning', 4000); // Longer duration for this warning
         } else {
-            alert('添加失败: ' + data.message);
+            showToast('添加失败: ' + data.message, 'danger');
         }
     })
     .catch(error => {
-        alert('添加失败：' + error.message);
+        showToast('添加失败：' + error.message, 'danger');
     });
 }
 
@@ -435,14 +433,14 @@ function deleteResume(resumeId) {
         .then(response => response.json())
         .then(data => {
             if (data.status === 'success') {
-                alert(data.message);
-                location.reload();
+                showToast(data.message, 'success');
+                setTimeout(() => location.reload(), 1000);
             } else {
-                alert(data.message);
+                showToast(data.message, 'danger');
             }
         })
         .catch(error => {
-            alert('删除失败：' + error.message);
+            showToast('删除失败：' + error.message, 'danger');
         });
     }
 }

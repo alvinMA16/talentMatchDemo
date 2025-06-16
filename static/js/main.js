@@ -55,6 +55,58 @@ function showAlert(message, type = 'info') {
     }
 }
 
+// Toast Notification System
+function showToast(message, type = 'info', duration = 2000) {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+
+    const toastId = 'toast-' + Date.now();
+    const toast = document.createElement('div');
+    toast.id = toastId;
+    toast.className = `toast align-items-center text-white bg-${type} border-0 fade-in`;
+    toast.setAttribute('role', 'alert');
+    toast.setAttribute('aria-live', 'assertive');
+    toast.setAttribute('aria-atomic', 'true');
+
+    let icon = '';
+    if (type === 'success') icon = '<i class="bi bi-check-circle-fill me-2"></i>';
+    if (type === 'danger') icon = '<i class="bi bi-x-octagon-fill me-2"></i>';
+    if (type === 'warning') icon = '<i class="bi bi-exclamation-triangle-fill me-2"></i>';
+    if (type === 'info') icon = '<i class="bi bi-info-circle-fill me-2"></i>';
+    if (type === 'primary') icon = '<i class="bi bi-gear-wide-connected me-2"></i>';
+
+
+    toast.innerHTML = `
+        <div class="d-flex">
+            <div class="toast-body">
+                ${icon}
+                ${message}
+            </div>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+        </div>
+    `;
+
+    container.appendChild(toast);
+
+    const bootstrapToast = new bootstrap.Toast(toast, {
+        autohide: false // We will handle hiding manually
+    });
+    bootstrapToast.show();
+
+    if (duration > 0) {
+      setTimeout(() => {
+          toast.classList.remove('fade-in');
+          toast.classList.add('fade-out');
+          toast.addEventListener('animationend', () => {
+              bootstrapToast.hide();
+              toast.remove();
+          }, { once: true });
+      }, duration);
+    }
+    
+    return bootstrapToast;
+}
+
 // 显示加载状态
 function showLoading(button, loadingText = '处理中...') {
     const originalText = button.innerHTML;
