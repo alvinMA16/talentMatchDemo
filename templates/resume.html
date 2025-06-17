@@ -10,10 +10,13 @@
             <i class="bi bi-files me-1"></i>批量上传
         </button>
         <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#uploadResumeModal">
-            <i class="bi bi-upload me-1"></i>上传单个简历
+            <i class="bi bi-upload me-1"></i>单个上传
         </button>
         <button class="btn btn-secondary" data-bs-toggle="modal" data-bs-target="#addResumeModal">
             <i class="bi bi-plus-circle me-1"></i>手动添加
+        </button>
+        <button class="btn btn-outline-danger" onclick="clearAllResumes()">
+            <i class="bi bi-trash3 me-1"></i>清空所有简历
         </button>
     </div>
 </div>
@@ -656,6 +659,31 @@ async function batchUploadResumes() {
     }
     showToast('批量处理完成！', 'success');
     setTimeout(() => location.reload(), 2000);
+}
+
+// 清空所有简历
+function clearAllResumes() {
+    if (confirm('确定要永久删除所有简历吗？此操作不可撤销。')) {
+        fetch('/api/database/clear', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ table: 'resumes' })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                showToast(data.message, 'success');
+                setTimeout(() => location.reload(), 1000);
+            } else {
+                showToast('清空失败: ' + data.message, 'danger');
+            }
+        })
+        .catch(error => {
+            showToast('操作失败：' + error.message, 'danger');
+        });
+    }
 }
 </script>
 {% endblock %} 

@@ -1,4 +1,5 @@
 DROP TABLE IF EXISTS resumes;
+DROP TABLE IF EXISTS job_descriptions;
 
 CREATE TABLE resumes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -14,4 +15,16 @@ CREATE TABLE resumes (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(email),
     UNIQUE(phone)
+);
+
+CREATE TABLE job_descriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    company TEXT,
+    location TEXT,
+    salary TEXT,
+    requirements TEXT,
+    description TEXT,
+    benefits TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ); 

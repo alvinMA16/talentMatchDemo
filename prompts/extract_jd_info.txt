@@ -1,0 +1,14 @@
+Please extract the following information from the provided job description text and return it as a strict JSON object. Do not modify any of the original wording or phrasing. Preserve the exact text from the document.
+
+The JSON structure should be:
+{
+    "title": "string (The job title)",
+    "company": "string (The company name, if available)",
+    "location": "string (The work location)",
+    "salary": "string (The salary or compensation details)",
+    "requirements": "string (A summary of the key skills and qualifications required)",
+    "description": "string (The main responsibilities and description of the role)",
+    "benefits": "string (A summary of the benefits offered)"
+}
+
+If a field is not present in the text, return an empty string "" for that field. 

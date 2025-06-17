@@ -1,10 +1,12 @@
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, Response
 import os
 import json
 import sqlite3
 import pathlib
 import google.generativeai as genai
 from dotenv import load_dotenv
+import pandas as pd
+import io
 
 # --- Database Setup ---
 DATABASE = 'talent_match.db'
@@ -55,6 +57,24 @@ def check_and_migrate_db():
             print("Database migration: Adding 'projects_json' column...")
             cursor.execute("ALTER TABLE resumes ADD COLUMN projects_json TEXT")
 
+        # Check for job_descriptions table
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='job_descriptions'")
+        if cursor.fetchone() is None:
+            print("Database migration: Creating 'job_descriptions' table...")
+            cursor.execute("""
+                CREATE TABLE job_descriptions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    company TEXT,
+                    location TEXT,
+                    salary TEXT,
+                    requirements TEXT,
+                    description TEXT,
+                    benefits TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
         conn.commit()
         print("Database schema is up-to-date.")
     except sqlite3.Error as e:
@@ -87,8 +107,8 @@ app.config['SECRET_KEY'] = 'talent-match-secret-key'
 
 # 模拟数据存储
 resumes = []
-job_descriptions = []
-matches = []
+# job_descriptions = [] # Will be fetched from DB
+# matches = [] # Will be fetched from DB
 
 # 首页路由 - 默认显示Resume管理
 @app.route('/')
@@ -129,6 +149,10 @@ def resume_management():
 # JD管理页面
 @app.route('/jd')
 def jd_management():
+    conn = get_db_connection()
+    jds_from_db = conn.execute('SELECT * FROM job_descriptions ORDER BY created_at DESC').fetchall()
+    conn.close()
+    job_descriptions = [dict(jd) for jd in jds_from_db]
     return render_template('jd.html', job_descriptions=job_descriptions)
 
 # 人岗匹配页面
@@ -160,7 +184,12 @@ def talent_matching():
             resume['projects'] = r['projects_json'] if 'projects_json' in r.keys() else ''
         resumes.append(resume)
 
-    return render_template('matching.html', resumes=resumes, job_descriptions=job_descriptions, matches=matches)
+    conn = get_db_connection()
+    jds_from_db = conn.execute('SELECT * FROM job_descriptions ORDER BY created_at DESC').fetchall()
+    job_descriptions = [dict(jd) for jd in jds_from_db]
+    conn.close()
+
+    return render_template('matching.html', resumes=resumes, job_descriptions=job_descriptions, matches=[])
 
 # API: 批量上传简历 (处理单个文件)
 @app.route('/api/resume/batch_upload', methods=['POST'])
@@ -348,36 +377,149 @@ def delete_resume(resume_id):
     conn.close()
     return jsonify({'status': 'success', 'message': '简历删除成功'})
 
+# API: 批量上传职位描述
+@app.route('/api/jd/batch_upload', methods=['POST'])
+def batch_upload_jd():
+    if 'jd_file' not in request.files:
+        return jsonify({'status': 'error', 'message': 'No file part in the request'}), 400
+
+    file = request.files['jd_file']
+    if file.filename == '':
+        return jsonify({'status': 'error', 'message': 'No file selected'}), 400
+
+    # Read the file into memory immediately to prevent "I/O operation on closed file"
+    # in the generator that is executed after this function returns.
+    file_content = file.read()
+    filename = file.filename.lower()
+
+    def generate_progress():
+        # 1. Read file content based on type
+        jobs_to_process = []
+        try:
+            if filename.endswith(('.xlsx', '.xls')):
+                # Use io.BytesIO to let pandas read from the in-memory bytes
+                df = pd.read_excel(io.BytesIO(file_content))
+                df['combined_text'] = df.apply(lambda row: ' '.join(row.astype(str)), axis=1)
+                jobs_to_process = [{'source': f"Row {i+2}", 'content': row['combined_text']} for i, row in df.iterrows()]
+            elif filename.endswith('.json'):
+                # Decode bytes to string for json.loads
+                raw_data = json.loads(file_content.decode('utf-8'))
+                if isinstance(raw_data, list):
+                    jobs_to_process = [{'source': f"Object {i+1}", 'content': json.dumps(obj)} for i, obj in enumerate(raw_data)]
+                else:
+                    yield f"data: {json.dumps({'status': 'error', 'message': 'JSON file must contain a list of job objects.'})}\n\n"
+                    return
+            else:
+                yield f"data: {json.dumps({'status': 'error', 'message': 'Unsupported file type. Please use JSON, XLSX, or XLS.'})}\n\n"
+                return
+        except Exception as e:
+            yield f"data: {json.dumps({'status': 'error', 'message': f'Failed to read or parse file: {e}'})}\n\n"
+            return
+
+        # 2. Process each job with GenAI
+        if os.environ.get("GOOGLE_API_KEY") is None:
+            yield f"data: {json.dumps({'status': 'error', 'message': 'Google API Key not configured'})}\n\n"
+            return
+        
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = get_prompt('extract_jd_info.txt')
+        if not prompt:
+            yield f"data: {json.dumps({'status': 'error', 'message': 'Could not load JD extraction prompt.'})}\n\n"
+            return
+
+        total_jobs = len(jobs_to_process)
+        success_count = 0
+        failures = []
+        conn = get_db_connection()
+
+        for i, job in enumerate(jobs_to_process):
+            try:
+                response = model.generate_content([job['content'], prompt])
+                cleaned_text = response.text.strip().replace('```json', '').replace('```', '').strip()
+                data = json.loads(cleaned_text)
+
+                title = data.get('title')
+                if not title:
+                    raise ValueError('Failed to extract job title.')
+                
+                company = data.get('company', '')
+                existing = conn.execute('SELECT id FROM job_descriptions WHERE title = ? AND company = ?', (title, company)).fetchone()
+                if existing:
+                    raise ValueError(f'Duplicate job already exists (ID: {existing["id"]})')
+
+                conn.execute(
+                    """
+                    INSERT INTO job_descriptions (title, company, location, salary, requirements, description, benefits)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (title, company, data.get('location', ''), data.get('salary', ''), data.get('requirements', ''), data.get('description', ''), data.get('benefits', ''))
+                )
+                conn.commit()
+                success_count += 1
+                yield f"data: {json.dumps({'type': 'progress', 'processed': i + 1, 'total': total_jobs, 'source': job['source']})}\n\n"
+
+            except Exception as e:
+                failures.append({'source': job['source'], 'reason': str(e)})
+                yield f"data: {json.dumps({'type': 'progress', 'processed': i + 1, 'total': total_jobs, 'source': job['source'], 'error': str(e)})}\n\n"
+        
+        conn.close()
+
+        yield f"data: {json.dumps({'type': 'complete', 'success_count': success_count, 'failures': failures})}\n\n"
+
+    return Response(generate_progress(), mimetype='text/event-stream')
+
 # API: 添加职位描述
 @app.route('/api/jd', methods=['POST'])
 def add_jd():
     data = request.get_json()
-    if not data or 'title' not in data:
-        return jsonify({'status': 'error', 'message': '缺少必要字段'}), 400
-    
-    jd = {
-        'id': len(job_descriptions) + 1,
-        'title': data['title'],
-        'company': data.get('company', ''),
-        'location': data.get('location', ''),
-        'salary': data.get('salary', ''),
-        'requirements': data.get('requirements', ''),
-        'description': data.get('description', ''),
-        'benefits': data.get('benefits', '')
-    }
-    job_descriptions.append(jd)
-    
+    if not data or not data.get('title'):
+        return jsonify({'status': 'error', 'message': '缺少职位名称'}), 400
+
+    title = data['title']
+    company = data.get('company', '')
+
+    conn = get_db_connection()
+
+    # Check for duplicates
+    existing = conn.execute('SELECT id FROM job_descriptions WHERE title = ? AND company = ?', (title, company)).fetchone()
+    if existing:
+        conn.close()
+        return jsonify({'status': 'duplicate', 'message': f'该职位的记录已存在 (ID: {existing["id"]})'})
+
+    # Insert new JD
+    cursor = conn.execute(
+        """
+        INSERT INTO job_descriptions (title, company, location, salary, requirements, description, benefits)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            title,
+            company,
+            data.get('location', ''),
+            data.get('salary', ''),
+            data.get('requirements', ''),
+            data.get('description', ''),
+            data.get('benefits', '')
+        )
+    )
+    conn.commit()
+    new_jd_id = cursor.lastrowid
+    new_jd = conn.execute('SELECT * FROM job_descriptions WHERE id = ?', (new_jd_id,)).fetchone()
+    conn.close()
+
     return jsonify({
         'status': 'success',
         'message': '职位描述添加成功',
-        'jd': jd
+        'jd': dict(new_jd)
     })
 
 # API: 删除职位描述
 @app.route('/api/jd/<int:jd_id>', methods=['DELETE'])
 def delete_jd(jd_id):
-    global job_descriptions
-    job_descriptions = [jd for jd in job_descriptions if jd['id'] != jd_id]
+    conn = get_db_connection()
+    conn.execute('DELETE FROM job_descriptions WHERE id = ?', (jd_id,))
+    conn.commit()
+    conn.close()
     return jsonify({'status': 'success', 'message': '职位描述删除成功'})
 
 # API: AI人岗匹配
@@ -429,6 +571,35 @@ def get_matches():
         'status': 'success',
         'matches': matches
     })
+
+# API: Clear table
+@app.route('/api/database/clear', methods=['POST'])
+def clear_database():
+    data = request.get_json()
+    table_to_clear = data.get('table')
+
+    if table_to_clear not in ['resumes', 'job_descriptions']:
+        return jsonify({'status': 'error', 'message': 'Invalid table name specified.'}), 400
+
+    try:
+        conn = get_db_connection()
+        conn.execute(f'DELETE FROM {table_to_clear}')
+        # Reset autoincrement counter for sqlite
+        conn.execute(f"DELETE FROM sqlite_sequence WHERE name='{table_to_clear}'")
+        conn.commit()
+        conn.close()
+        return jsonify({'status': 'success', 'message': f"Table '{table_to_clear}' has been cleared."})
+    except sqlite3.Error as e:
+        # Handle case where table might not be in sqlite_sequence (if it never had data)
+        if "no such table: sqlite_sequence" in str(e):
+             conn.commit()
+             conn.close()
+             return jsonify({'status': 'success', 'message': f"Table '{table_to_clear}' has been cleared."})
+        print(f"Database clear error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 # 错误处理
 @app.errorhandler(404)
