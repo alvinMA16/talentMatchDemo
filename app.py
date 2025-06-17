@@ -16,6 +16,36 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+def get_desensitized_version(resume_data):
+    """Calls GenAI to create a desensitized version of the resume."""
+    if os.environ.get("GOOGLE_API_KEY") is None:
+        print("Warning: GOOGLE_API_KEY not found. Skipping desensitization.")
+        # Return the original data with PII cleared as a fallback
+        fallback_data = resume_data.copy()
+        fallback_data['name'] = "Candidate"
+        fallback_data['email'] = "hidden"
+        fallback_data['phone'] = "hidden"
+        return fallback_data
+
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = get_prompt('desensitize_resume.txt')
+        if not prompt:
+            raise Exception("Could not load desensitization prompt.")
+
+        # Convert python dict to a JSON string to send to the model
+        resume_json_string = json.dumps(resume_data)
+
+        response = model.generate_content([prompt, resume_json_string])
+        
+        cleaned_text = response.text.strip().replace('```json', '').replace('```', '').strip()
+        desensitized_data = json.loads(cleaned_text)
+        return desensitized_data
+    except Exception as e:
+        print(f"Error during desensitization: {e}")
+        # In case of failure, return the original data to avoid breaking the flow
+        return resume_data
+
 def get_prompt(filename):
     """Reads a prompt from the prompts directory."""
     PROMPT_DIR = 'prompts'
@@ -56,6 +86,11 @@ def check_and_migrate_db():
         if 'projects_json' not in columns:
             print("Database migration: Adding 'projects_json' column...")
             cursor.execute("ALTER TABLE resumes ADD COLUMN projects_json TEXT")
+
+        # Check for desensitized_json column
+        if 'desensitized_json' not in columns:
+            print("Database migration: Adding 'desensitized_json' column...")
+            cursor.execute("ALTER TABLE resumes ADD COLUMN desensitized_json TEXT")
 
         # Check for job_descriptions table
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='job_descriptions'")
@@ -142,6 +177,13 @@ def resume_management():
             resume['projects'] = json.loads(r['projects_json']) if 'projects_json' in r.keys() and r['projects_json'] else []
         except json.JSONDecodeError:
             resume['projects'] = r['projects_json'] if 'projects_json' in r.keys() else ''
+        
+        # Safely parse desensitized data
+        try:
+            resume['desensitized'] = json.loads(r['desensitized_json']) if 'desensitized_json' in r.keys() and r['desensitized_json'] else None
+        except (json.JSONDecodeError, TypeError):
+            resume['desensitized'] = None
+
         resumes.append(resume)
 
     return render_template('resume.html', resumes=resumes)
@@ -224,7 +266,10 @@ def batch_upload_resume():
         cleaned_text = response.text.strip().replace('```json', '').replace('```', '').strip()
         data = json.loads(cleaned_text)
 
-        # 2. Duplicate Check
+        # 2. Desensitize the extracted data
+        desensitized_data = get_desensitized_version(data)
+
+        # 3. Duplicate Check
         name = data.get('name')
         email = data.get('email')
         phone = data.get('phone')
@@ -240,11 +285,11 @@ def batch_upload_resume():
             conn.close()
             return jsonify({'status': 'duplicate', 'message': f"Candidate already exists (ID: {existing['id']})"})
 
-        # 3. Insert into DB
+        # 4. Insert into DB
         conn.execute(
             """
-            INSERT INTO resumes (name, email, phone, skills, summary, experience_json, education_json, publications_json, projects_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO resumes (name, email, phone, skills, summary, experience_json, education_json, publications_json, projects_json, desensitized_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 name, email, phone,
@@ -253,7 +298,8 @@ def batch_upload_resume():
                 json.dumps(data.get('experience', [])),
                 json.dumps(data.get('education', [])),
                 json.dumps(data.get('publications', [])),
-                json.dumps(data.get('projects', []))
+                json.dumps(data.get('projects', [])),
+                json.dumps(desensitized_data)
             )
         )
         conn.commit()
@@ -339,11 +385,14 @@ def add_resume():
             'message': f"A candidate with similar info already exists (ID: {existing['id']}, Name: {existing['name']}). Please review before adding another."
         })
 
+    # Get desensitized version
+    desensitized_data = get_desensitized_version(data)
+
     # Insert new resume
     conn.execute(
         """
-        INSERT INTO resumes (name, email, phone, skills, summary, experience_json, education_json, publications_json, projects_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO resumes (name, email, phone, skills, summary, experience_json, education_json, publications_json, projects_json, desensitized_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             name,
@@ -354,7 +403,8 @@ def add_resume():
             json.dumps(data.get('experience', [])),
             json.dumps(data.get('education', [])),
             json.dumps(data.get('publications', [])),
-            json.dumps(data.get('projects', []))
+            json.dumps(data.get('projects', [])),
+            json.dumps(desensitized_data)
         )
     )
     conn.commit()
