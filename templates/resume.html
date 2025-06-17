@@ -6,8 +6,11 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h2><i class="bi bi-file-person me-2"></i>简历管理</h2>
     <div>
+        <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#batchUploadModal">
+            <i class="bi bi-files me-1"></i>批量上传
+        </button>
         <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#uploadResumeModal">
-            <i class="bi bi-upload me-1"></i>上传简历
+            <i class="bi bi-upload me-1"></i>上传单个简历
         </button>
         <button class="btn btn-secondary" data-bs-toggle="modal" data-bs-target="#addResumeModal">
             <i class="bi bi-plus-circle me-1"></i>手动添加
@@ -118,6 +121,14 @@
                                 <textarea class="form-control form-control-sm" id="parsedResumeExperience" rows="8"></textarea>
                             </div>
                             <div class="mb-2">
+                                <label class="form-label">发表论文</label>
+                                <textarea class="form-control form-control-sm" id="parsedResumePublications" rows="4"></textarea>
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label">项目经历</label>
+                                <textarea class="form-control form-control-sm" id="parsedResumeProjects" rows="4"></textarea>
+                            </div>
+                            <div class="mb-2">
                                 <label class="form-label">技能</label>
                                 <textarea class="form-control form-control-sm" id="parsedResumeSkills" rows="3"></textarea>
                             </div>
@@ -197,6 +208,40 @@
     </div>
 </div>
 
+<!-- 批量上传模态框 -->
+<div class="modal fade" id="batchUploadModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">批量上传简历</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label for="batchResumeFiles" class="form-label">选择多个PDF文件</label>
+                    <input class="form-control" type="file" id="batchResumeFiles" accept=".pdf" multiple>
+                </div>
+                <button type="button" class="btn btn-primary w-100" onclick="batchUploadResumes()">
+                    <i class="bi bi-upload me-1"></i>开始上传和解析
+                </button>
+                <div id="batchProgressContainer" class="mt-3 d-none">
+                    <div class="progress">
+                        <div id="batchProgressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                    </div>
+                    <p id="batchProgressText" class="text-center mt-1"></p>
+                </div>
+                <div id="batchErrorContainer" class="mt-3 d-none">
+                    <h6>处理失败的文件:</h6>
+                    <ul id="batchErrorList" class="list-group"></ul>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- 简历详情模态框 -->
 <div class="modal fade" id="resumeDetailsModal" tabindex="-1">
     <div class="modal-dialog modal-lg modal-dialog-scrollable">
@@ -216,6 +261,12 @@
                 
                 <h6 class="mt-4"><i class="bi bi-book me-2"></i>教育背景</h6>
                 <div id="detailsEducation"></div>
+
+                <h6 class="mt-4"><i class="bi bi-journal-text me-2"></i>发表论文</h6>
+                <div id="detailsPublications"></div>
+
+                <h6 class="mt-4"><i class="bi bi-kanban me-2"></i>项目经历</h6>
+                <div id="detailsProjects"></div>
 
                 <h6 class="mt-4"><i class="bi bi-tools me-2"></i>技能</h6>
                 <p id="detailsSkills" class="bg-light p-2 rounded"></p>
@@ -341,6 +392,24 @@ function formatEducation(edu) {
     return parts.join('\n');
 }
 
+function formatPublication(pub) {
+    if (typeof pub !== 'object' || pub === null) return pub;
+    let parts = [];
+    if (pub.title) parts.push(`- **${pub.title}**`);
+    if (pub.journal) parts.push(`  *${pub.journal}*`);
+    if (pub.summary) parts.push(`  ${pub.summary}`);
+    return parts.join('\n');
+}
+
+function formatProject(proj) {
+    if (typeof proj !== 'object' || proj === null) return proj;
+    let parts = [];
+    if (proj.name) parts.push(`- **${proj.name}**`);
+    if (proj.technologies) parts.push(`  *Technologies: ${proj.technologies}*`);
+    if (proj.description) parts.push(`  ${proj.description}`);
+    return parts.join('\n');
+}
+
 function fillResumeForm(resumeData) {
     document.getElementById('parsedResumeName').value = resumeData.name || '';
     document.getElementById('parsedResumeEmail').value = resumeData.email || '';
@@ -348,6 +417,8 @@ function fillResumeForm(resumeData) {
     document.getElementById('parsedResumeSkills').value = Array.isArray(resumeData.skills) ? resumeData.skills.join(', ') : resumeData.skills || '';
     document.getElementById('parsedResumeExperience').value = formatArray(resumeData.experience, formatExperience);
     document.getElementById('parsedResumeEducation').value = formatArray(resumeData.education, formatEducation);
+    document.getElementById('parsedResumePublications').value = formatArray(resumeData.publications, formatPublication);
+    document.getElementById('parsedResumeProjects').value = formatArray(resumeData.projects, formatProject);
     document.getElementById('parsedResumeSummary').value = resumeData.summary || '';
 }
 
@@ -370,6 +441,8 @@ function saveParsedResume() {
     resumeData.skills = document.getElementById('parsedResumeSkills').value;
     // For now, we don't support editing complex fields (experience, education) via the textarea.
     // The original structured data for these fields is preserved.
+    resumeData.publications = JSON.parse(document.getElementById('parsedResumeForm').dataset.resumeData).publications;
+    resumeData.projects = JSON.parse(document.getElementById('parsedResumeForm').dataset.resumeData).projects;
     
     if (!resumeData.name.trim()) {
         showToast('请输入姓名', 'warning');
@@ -485,8 +558,104 @@ function showResumeDetails(button) {
         eduContainer.innerHTML = `<p>${resume.education || 'N/A'}</p>`;
     }
 
+    // Format and populate publications
+    const pubContainer = document.getElementById('detailsPublications');
+    if (resume.publications && Array.isArray(resume.publications) && resume.publications.length > 0) {
+        pubContainer.innerHTML = resume.publications.map(pub => `
+            <div class="mb-3 p-2">
+                <h6 class="mb-0">${pub.title || 'N/A'}</h6>
+                <p class="mb-1 text-primary fst-italic">${pub.journal || ''}</p>
+                <p class="mb-0 small text-muted">${pub.summary || ''}</p>
+            </div>
+        `).join('');
+    } else {
+        pubContainer.innerHTML = `<p class="text-muted">无</p>`;
+    }
+
+    // Format and populate projects
+    const projContainer = document.getElementById('detailsProjects');
+    if (resume.projects && Array.isArray(resume.projects) && resume.projects.length > 0) {
+        projContainer.innerHTML = resume.projects.map(proj => `
+            <div class="mb-3 p-2 border-start border-4 border-info">
+                <h6 class="mb-0">${proj.name || 'N/A'}</h6>
+                <p class="mb-1 text-primary fst-italic">${proj.technologies || ''}</p>
+                <p class="mb-0 small text-muted">${proj.description || ''}</p>
+            </div>
+        `).join('');
+    } else {
+        projContainer.innerHTML = `<p class="text-muted">无</p>`;
+    }
+
     const modal = new bootstrap.Modal(document.getElementById('resumeDetailsModal'));
     modal.show();
+}
+
+// 批量上传
+async function batchUploadResumes() {
+    const fileInput = document.getElementById('batchResumeFiles');
+    const files = fileInput.files;
+
+    if (files.length === 0) {
+        showToast('请至少选择一个文件', 'warning');
+        return;
+    }
+
+    const progressContainer = document.getElementById('batchProgressContainer');
+    const progressBar = document.getElementById('batchProgressBar');
+    const progressText = document.getElementById('batchProgressText');
+    const errorContainer = document.getElementById('batchErrorContainer');
+    const errorList = document.getElementById('batchErrorList');
+
+    progressContainer.classList.remove('d-none');
+    errorContainer.classList.add('d-none');
+    errorList.innerHTML = '';
+    
+    let successCount = 0;
+    let errorCount = 0;
+
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const formData = new FormData();
+        formData.append('resume_file', file);
+
+        // Update progress bar
+        const progress = Math.round(((i + 1) / files.length) * 100);
+        progressBar.style.width = `${progress}%`;
+        progressBar.innerText = `${progress}%`;
+        progressText.innerText = `处理中: ${i + 1} / ${files.length} - ${file.name}`;
+
+        try {
+            const response = await fetch('/api/resume/batch_upload', {
+                method: 'POST',
+                body: formData
+            });
+            const result = await response.json();
+
+            if (result.status === 'success') {
+                successCount++;
+            } else {
+                errorCount++;
+                const li = document.createElement('li');
+                li.className = 'list-group-item list-group-item-danger';
+                li.innerText = `${file.name} - 失败原因: ${result.message}`;
+                errorList.appendChild(li);
+            }
+        } catch (error) {
+            errorCount++;
+            const li = document.createElement('li');
+            li.className = 'list-group-item list-group-item-danger';
+            li.innerText = `${file.name} - 失败原因: ${error.message}`;
+            errorList.appendChild(li);
+        }
+    }
+
+    // Final summary
+    progressText.innerText = `处理完成！成功: ${successCount}, 失败: ${errorCount}`;
+    if(errorCount > 0) {
+        errorContainer.classList.remove('d-none');
+    }
+    showToast('批量处理完成！', 'success');
+    setTimeout(() => location.reload(), 2000);
 }
 </script>
 {% endblock %} 

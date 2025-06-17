@@ -14,6 +14,20 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+def get_prompt(filename):
+    """Reads a prompt from the prompts directory."""
+    PROMPT_DIR = 'prompts'
+    file_path = os.path.join(PROMPT_DIR, filename)
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        print(f"Error: Prompt file not found at '{file_path}'")
+        return None
+    except Exception as e:
+        print(f"Error reading prompt file '{file_path}': {e}")
+        return None
+
 def init_db():
     conn = get_db_connection()
     with open('schema.sql', 'r') as f:
@@ -21,10 +35,40 @@ def init_db():
     conn.close()
     print("Database initialized.")
 
+def check_and_migrate_db():
+    """Checks if the database schema is up-to-date and applies migrations if not."""
+    print("Checking database schema...")
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        # Get the columns of the resumes table
+        cursor.execute("PRAGMA table_info(resumes)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        # Check for publications_json column
+        if 'publications_json' not in columns:
+            print("Database migration: Adding 'publications_json' column...")
+            cursor.execute("ALTER TABLE resumes ADD COLUMN publications_json TEXT")
+        
+        # Check for projects_json column
+        if 'projects_json' not in columns:
+            print("Database migration: Adding 'projects_json' column...")
+            cursor.execute("ALTER TABLE resumes ADD COLUMN projects_json TEXT")
+
+        conn.commit()
+        print("Database schema is up-to-date.")
+    except sqlite3.Error as e:
+        print(f"Database migration failed: {e}")
+    finally:
+        conn.close()
+
 # Call this function once to create your DB file and table
 def try_init_db():
     if not os.path.exists(DATABASE):
         init_db()
+    else:
+        # If DB exists, check if it needs migration
+        check_and_migrate_db()
 
 # 加载环境变量
 load_dotenv()
@@ -67,9 +111,17 @@ def resume_management():
         except json.JSONDecodeError:
             resume['experience'] = r['experience_json'] # Store as plain text if not valid JSON
         try:
-            resume['education'] = json.loads(r['education_json']) if r['education_json'] else []
+            resume['education'] = json.loads(r['education_json']) if 'education_json' in r.keys() and r['education_json'] else []
         except json.JSONDecodeError:
             resume['education'] = r['education_json']
+        try:
+            resume['publications'] = json.loads(r['publications_json']) if 'publications_json' in r.keys() and r['publications_json'] else []
+        except json.JSONDecodeError:
+            resume['publications'] = r['publications_json'] if 'publications_json' in r.keys() else ''
+        try:
+            resume['projects'] = json.loads(r['projects_json']) if 'projects_json' in r.keys() and r['projects_json'] else []
+        except json.JSONDecodeError:
+            resume['projects'] = r['projects_json'] if 'projects_json' in r.keys() else ''
         resumes.append(resume)
 
     return render_template('resume.html', resumes=resumes)
@@ -95,12 +147,94 @@ def talent_matching():
         except json.JSONDecodeError:
             resume['experience'] = r['experience_json'] # Store as plain text if not valid JSON
         try:
-            resume['education'] = json.loads(r['education_json']) if r['education_json'] else []
+            resume['education'] = json.loads(r['education_json']) if 'education_json' in r.keys() and r['education_json'] else []
         except json.JSONDecodeError:
             resume['education'] = r['education_json']
+        try:
+            resume['publications'] = json.loads(r['publications_json']) if 'publications_json' in r.keys() and r['publications_json'] else []
+        except json.JSONDecodeError:
+            resume['publications'] = r['publications_json'] if 'publications_json' in r.keys() else ''
+        try:
+            resume['projects'] = json.loads(r['projects_json']) if 'projects_json' in r.keys() and r['projects_json'] else []
+        except json.JSONDecodeError:
+            resume['projects'] = r['projects_json'] if 'projects_json' in r.keys() else ''
         resumes.append(resume)
 
     return render_template('matching.html', resumes=resumes, job_descriptions=job_descriptions, matches=matches)
+
+# API: 批量上传简历 (处理单个文件)
+@app.route('/api/resume/batch_upload', methods=['POST'])
+def batch_upload_resume():
+    if 'resume_file' not in request.files:
+        return jsonify({'status': 'error', 'message': 'No file part in the request'}), 400
+
+    file = request.files['resume_file']
+    if file.filename == '':
+        return jsonify({'status': 'error', 'message': 'No file selected'}), 400
+
+    if not file or not file.filename.endswith('.pdf'):
+        return jsonify({'status': 'error', 'message': 'Invalid file type, only PDF is supported'}), 400
+
+    try:
+        # 1. AI Parsing
+        if os.environ.get("GOOGLE_API_KEY") is None:
+            return jsonify({'status': 'error', 'message': 'Google API Key not configured'}), 500
+
+        pdf_bytes = file.read()
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        prompt = get_prompt('extract_resume_info.txt')
+        if not prompt:
+            return jsonify({'status': 'error', 'message': 'Could not load resume extraction prompt.'}), 500
+
+        response = model.generate_content([
+            {"mime_type": "application/pdf", "data": pdf_bytes},
+            prompt
+        ])
+        
+        cleaned_text = response.text.strip().replace('```json', '').replace('```', '').strip()
+        data = json.loads(cleaned_text)
+
+        # 2. Duplicate Check
+        name = data.get('name')
+        email = data.get('email')
+        phone = data.get('phone')
+        
+        if not name:
+             return jsonify({'status': 'error', 'message': 'Failed to extract candidate name.'})
+
+        conn = get_db_connection()
+        query = "SELECT id FROM resumes WHERE name = ? OR (email != '' AND email = ?) OR (phone != '' AND phone = ?)"
+        existing = conn.execute(query, (name, email, phone)).fetchone()
+
+        if existing:
+            conn.close()
+            return jsonify({'status': 'duplicate', 'message': f"Candidate already exists (ID: {existing['id']})"})
+
+        # 3. Insert into DB
+        conn.execute(
+            """
+            INSERT INTO resumes (name, email, phone, skills, summary, experience_json, education_json, publications_json, projects_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                name, email, phone,
+                data.get('skills', ''),
+                data.get('summary', ''),
+                json.dumps(data.get('experience', [])),
+                json.dumps(data.get('education', [])),
+                json.dumps(data.get('publications', [])),
+                json.dumps(data.get('projects', []))
+            )
+        )
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'status': 'success', 'message': 'Resume added successfully'})
+
+    except Exception as e:
+        print(f"Batch upload error for {file.filename}: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 # API: 上传并解析简历
 @app.route('/api/resume/upload', methods=['POST'])
@@ -120,33 +254,9 @@ def upload_resume():
 
             pdf_bytes = file.read()
             
-            prompt = """
-            Please extract the following information from this resume and return it as a strict JSON object. Do not include any explanatory text or markdown code block markers.
-
-            The JSON structure should be:
-            {
-                "name": "string (full name)",
-                "email": "string (email address)",
-                "phone": "string (phone number)",
-                "skills": "string (comma-separated list of skills)",
-                "experience": [
-                    {
-                        "role": "string",
-                        "company": "string",
-                        "dates": "string (e.g., 'Jan 2020 - Present')",
-                        "description": "string (key responsibilities and achievements)"
-                    }
-                ],
-                "education": [
-                    {
-                        "institution": "string",
-                        "degree": "string",
-                        "dates": "string (e.g., 'Sep 2016 - May 2020')"
-                    }
-                ],
-                "summary": "string (a brief personal summary)"
-            }
-            """
+            prompt = get_prompt('extract_resume_info.txt')
+            if not prompt:
+                 return jsonify({'status': 'error', 'message': 'Could not load resume extraction prompt.'}), 500
             
             model = genai.GenerativeModel('gemini-1.5-flash')
             response = model.generate_content([
@@ -161,11 +271,14 @@ def upload_resume():
             cleaned_text = response.text.strip().replace('```json', '').replace('```', '').strip()
             extracted_data = json.loads(cleaned_text)
             
+            # 打印log
+            print(f"=================Extracted data===============:\n {extracted_data}")
+
             return jsonify({
                 'status': 'success',
                 'message': '简历解析成功',
                 'data': extracted_data
-            })
+            })           
 
         except Exception as e:
             print(f"Error parsing resume: {e}")
@@ -200,8 +313,8 @@ def add_resume():
     # Insert new resume
     conn.execute(
         """
-        INSERT INTO resumes (name, email, phone, skills, summary, experience_json, education_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO resumes (name, email, phone, skills, summary, experience_json, education_json, publications_json, projects_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             name,
@@ -210,7 +323,9 @@ def add_resume():
             data.get('skills', ''),
             data.get('summary', ''),
             json.dumps(data.get('experience', [])),
-            json.dumps(data.get('education', []))
+            json.dumps(data.get('education', [])),
+            json.dumps(data.get('publications', [])),
+            json.dumps(data.get('projects', []))
         )
     )
     conn.commit()

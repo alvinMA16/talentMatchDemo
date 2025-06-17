@@ -1,0 +1,41 @@
+Please extract the following information from this resume and return it as a strict JSON object. Do not modify any of the original wording or phrasing. Preserve the exact text from the document.
+
+The JSON structure should be:
+{
+    "name": "string (full name)",
+    "email": "string (email address)",
+    "phone": "string (phone number)",
+    "skills": "string (comma-separated list of skills)",
+    "summary": "string (a brief personal summary)",
+    "experience": [
+        {
+            "role": "string",
+            "company": "string",
+            "dates": "string (e.g., 'Jan 2020 - Present')",
+            "description": "string (key responsibilities and achievements)"
+        }
+    ],
+    "education": [
+        {
+            "institution": "string",
+            "degree": "string (Include degree, major, and any details like GPA, ranking, or scores found in the text)",
+            "dates": "string (e.g., 'Sep 2016 - May 2020')"
+        }
+    ],
+    "publications": [
+        {
+            "title": "string",
+            "journal": "string (e.g., 'Journal of AI Research, Vol. 1, 2023')",
+            "summary": "string (brief summary of the paper)"
+        }
+    ],
+    "projects": [
+        {
+            "name": "string",
+            "technologies": "string (comma-separated list of tech used)",
+            "description": "string (a short description of the project)"
+        }
+    ]
+}
+
+If a section like 'publications' or 'projects' is not present, return an empty array [] for that field. 

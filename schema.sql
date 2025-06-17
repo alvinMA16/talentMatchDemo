@@ -9,6 +9,8 @@ CREATE TABLE resumes (
     summary TEXT,
     experience_json TEXT,
     education_json TEXT,
+    publications_json TEXT,
+    projects_json TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(email),
     UNIQUE(phone)
