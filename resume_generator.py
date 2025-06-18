@@ -14,7 +14,11 @@ resume_generator_bp = Blueprint(
 
 # Initialize OpenAI client
 # Make sure you have OPENAI_API_KEY set in your environment variables
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+client = OpenAI(
+    api_key=os.environ.get("OPENAI_API_KEY"),
+    base_url = "https://admin-mbymnex2-eastus2.cognitiveservices.azure.com/openai/deployments/o4-mini",
+    default_query={"api-version":"2025-01-01-preview"}
+    )
 
 # --- Tool Definition ---
 def find_candidate_by_id_or_name(candidate_id=None, name=None):

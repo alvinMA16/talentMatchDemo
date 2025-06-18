@@ -43,7 +43,7 @@
             <div class="card">
                 <div class="card-header bg-light d-flex justify-content-between align-items-center py-3">
                     <h5 class="mb-0"><i class="bi bi-file-earmark-person me-2"></i>简历预览</h5>
-                    <button class="btn btn-success btn-sm" onclick="saveResume()"><i class="bi bi-save me-1"></i>保存简历</button>
+                    <button class="btn btn-success btn-sm" onclick="exportToPdf()"><i class="bi bi-file-earmark-arrow-down me-1"></i>导出 PDF</button>
                 </div>
                 <div class="card-body bg-secondary d-flex justify-content-center align-items-start p-3">
                     <div id="a4-preview-container" class="bg-white shadow-lg">
@@ -57,9 +57,10 @@
 
 <style>
     #a4-preview-container {
-        width: 210mm;
-        height: 297mm;
-        transform-origin: top left;
+        width: 100%; /* Make it responsive to container width */
+        aspect-ratio: 210 / 297; /* A4 paper aspect ratio */
+        max-width: 210mm; /* Maximum width */
+        height: auto;
         overflow: hidden;
     }
     #resume-preview-iframe {
@@ -185,6 +186,43 @@ function toggleSpinner(show) {
         spinner.classList.add('d-none');
         inputGroup.classList.remove('d-none');
     }
+}
+
+function exportToPdf() {
+    const iframe = document.getElementById('resume-preview-iframe');
+    const resumeDocument = iframe.contentWindow.document;
+    const resumeHtml = resumeDocument.body;
+
+    if (!resumeHtml || !resumeDocument.querySelector('body > *')) {
+        showToast('没有可导出的简历内容。', 'warning');
+        return;
+    }
+
+    showToast('正在生成 PDF...', 'info');
+
+    // Get candidate name for filename, default to 'resume'
+    let filename = 'resume.pdf';
+    const nameElement = resumeDocument.querySelector('h1, #name, .name');
+    if (nameElement) {
+        filename = `${nameElement.textContent.trim()}_resume.pdf`;
+    }
+
+    const opt = {
+      margin:       0,
+      filename:     filename,
+      image:        { type: 'jpeg', quality: 0.98 },
+      html2canvas:  { scale: 2, useCORS: true },
+      jsPDF:        { unit: 'in', format: 'a4', orientation: 'portrait' }
+    };
+
+    html2pdf().from(resumeHtml).set(opt).save()
+        .then(() => {
+            showToast('PDF 导出成功!', 'success');
+        })
+        .catch((error) => {
+            console.error('PDF export error:', error);
+            showToast('PDF 导出失败，请查看控制台获取详情。', 'danger');
+        });
 }
 
 function saveResume() {
