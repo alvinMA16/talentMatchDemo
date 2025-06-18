@@ -46,6 +46,34 @@ def get_desensitized_version(resume_data):
         # In case of failure, return the original data to avoid breaking the flow
         return resume_data
 
+def get_desensitized_jd_version(jd_data):
+    """Calls GenAI to create a desensitized version of the job description."""
+    if os.environ.get("GOOGLE_API_KEY") is None:
+        print("Warning: GOOGLE_API_KEY not found. Skipping JD desensitization.")
+        # Return the original data with sensitive info cleared as a fallback
+        fallback_data = jd_data.copy()
+        fallback_data['company'] = "某公司"
+        return fallback_data
+
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = get_prompt('desensitize_jd.txt')
+        if not prompt:
+            raise Exception("Could not load JD desensitization prompt.")
+
+        # Convert python dict to a JSON string to send to the model
+        jd_json_string = json.dumps(jd_data)
+
+        response = model.generate_content([prompt, jd_json_string])
+        
+        cleaned_text = response.text.strip().replace('```json', '').replace('```', '').strip()
+        desensitized_data = json.loads(cleaned_text)
+        return desensitized_data
+    except Exception as e:
+        print(f"Error during JD desensitization: {e}")
+        # In case of failure, return the original data to avoid breaking the flow
+        return jd_data
+
 def get_prompt(filename):
     """Reads a prompt from the prompts directory."""
     PROMPT_DIR = 'prompts'
@@ -106,7 +134,34 @@ def check_and_migrate_db():
                     requirements TEXT,
                     description TEXT,
                     benefits TEXT,
+                    desensitized_json TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+        # Check for desensitized_json column in job_descriptions table
+        cursor.execute("PRAGMA table_info(job_descriptions)")
+        jd_columns = [row[1] for row in cursor.fetchall()]
+        if 'desensitized_json' not in jd_columns:
+            print("Database migration: Adding 'desensitized_json' column to job_descriptions...")
+            cursor.execute("ALTER TABLE job_descriptions ADD COLUMN desensitized_json TEXT")
+
+        # Check for facilitation_results table
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='facilitation_results'")
+        if cursor.fetchone() is None:
+            print("Database migration: Creating 'facilitation_results' table...")
+            cursor.execute("""
+                CREATE TABLE facilitation_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    resume_id INTEGER,
+                    jd_id INTEGER,
+                    facilitation_score INTEGER,
+                    strengths TEXT,
+                    improvements TEXT,
+                    recommendation TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (resume_id) REFERENCES resumes (id) ON DELETE CASCADE,
+                    FOREIGN KEY (jd_id) REFERENCES job_descriptions (id) ON DELETE CASCADE
                 )
             """)
 
@@ -143,7 +198,6 @@ app.config['SECRET_KEY'] = 'talent-match-secret-key'
 # 模拟数据存储
 resumes = []
 # job_descriptions = [] # Will be fetched from DB
-# matches = [] # Will be fetched from DB
 
 # 首页路由 - 默认显示Resume管理
 @app.route('/')
@@ -195,43 +249,44 @@ def jd_management():
     jds_from_db = conn.execute('SELECT * FROM job_descriptions ORDER BY created_at DESC').fetchall()
     conn.close()
     job_descriptions = [dict(jd) for jd in jds_from_db]
+    
+    # Parse desensitized data for each JD
+    for jd in job_descriptions:
+        try:
+            jd['desensitized'] = json.loads(jd['desensitized_json']) if jd.get('desensitized_json') else None
+        except (json.JSONDecodeError, TypeError):
+            jd['desensitized'] = None
+    
     return render_template('jd.html', job_descriptions=job_descriptions)
 
-# 人岗匹配页面
-@app.route('/matching')
-def talent_matching():
+# 人岗撮合页面
+@app.route('/facilitate')
+def talent_facilitate():
     conn = get_db_connection()
-    resumes_from_db = conn.execute('SELECT * FROM resumes ORDER BY created_at DESC').fetchall()
+    
+    # Fetch resumes sorted by ID
+    resumes = conn.execute('SELECT id, name FROM resumes ORDER BY id ASC').fetchall()
+    
+    # Fetch job descriptions sorted by ID
+    jds = conn.execute('SELECT id, title, company FROM job_descriptions ORDER BY id ASC').fetchall()
+    
+    # Fetch facilitation history
+    history_query = """
+        SELECT
+            fr.id,
+            fr.created_at,
+            r.name as resume_name,
+            j.title as jd_title
+        FROM facilitation_results fr
+        JOIN resumes r ON fr.resume_id = r.id
+        JOIN job_descriptions j ON fr.jd_id = j.id
+        ORDER BY fr.created_at DESC;
+    """
+    facilitation_history = conn.execute(history_query).fetchall()
+    
     conn.close()
 
-    resumes = []
-    for r in resumes_from_db:
-        resume = dict(r)
-        # Safely parse JSON fields
-        try:
-            resume['experience'] = json.loads(r['experience_json']) if r['experience_json'] else []
-        except json.JSONDecodeError:
-            resume['experience'] = r['experience_json'] # Store as plain text if not valid JSON
-        try:
-            resume['education'] = json.loads(r['education_json']) if 'education_json' in r.keys() and r['education_json'] else []
-        except json.JSONDecodeError:
-            resume['education'] = r['education_json']
-        try:
-            resume['publications'] = json.loads(r['publications_json']) if 'publications_json' in r.keys() and r['publications_json'] else []
-        except json.JSONDecodeError:
-            resume['publications'] = r['publications_json'] if 'publications_json' in r.keys() else ''
-        try:
-            resume['projects'] = json.loads(r['projects_json']) if 'projects_json' in r.keys() and r['projects_json'] else []
-        except json.JSONDecodeError:
-            resume['projects'] = r['projects_json'] if 'projects_json' in r.keys() else ''
-        resumes.append(resume)
-
-    conn = get_db_connection()
-    jds_from_db = conn.execute('SELECT * FROM job_descriptions ORDER BY created_at DESC').fetchall()
-    job_descriptions = [dict(jd) for jd in jds_from_db]
-    conn.close()
-
-    return render_template('matching.html', resumes=resumes, job_descriptions=job_descriptions, matches=[])
+    return render_template('facilitate.html', resumes=resumes, job_descriptions=jds, facilitation_history=facilitation_history)
 
 # API: 批量上传简历 (处理单个文件)
 @app.route('/api/resume/batch_upload', methods=['POST'])
@@ -492,6 +547,9 @@ def batch_upload_jd():
                 if not title:
                     raise ValueError('Failed to extract job title.')
                 
+                # Get desensitized version
+                desensitized_data = get_desensitized_jd_version(data)
+                
                 company = data.get('company', '')
                 existing = conn.execute('SELECT id FROM job_descriptions WHERE title = ? AND company = ?', (title, company)).fetchone()
                 if existing:
@@ -499,10 +557,10 @@ def batch_upload_jd():
 
                 conn.execute(
                     """
-                    INSERT INTO job_descriptions (title, company, location, salary, requirements, description, benefits)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO job_descriptions (title, company, location, salary, requirements, description, benefits, desensitized_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (title, company, data.get('location', ''), data.get('salary', ''), data.get('requirements', ''), data.get('description', ''), data.get('benefits', ''))
+                    (title, company, data.get('location', ''), data.get('salary', ''), data.get('requirements', ''), data.get('description', ''), data.get('benefits', ''), json.dumps(desensitized_data))
                 )
                 conn.commit()
                 success_count += 1
@@ -536,11 +594,14 @@ def add_jd():
         conn.close()
         return jsonify({'status': 'duplicate', 'message': f'该职位的记录已存在 (ID: {existing["id"]})'})
 
+    # Get desensitized version
+    desensitized_data = get_desensitized_jd_version(data)
+
     # Insert new JD
     cursor = conn.execute(
         """
-        INSERT INTO job_descriptions (title, company, location, salary, requirements, description, benefits)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO job_descriptions (title, company, location, salary, requirements, description, benefits, desensitized_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             title,
@@ -549,7 +610,8 @@ def add_jd():
             data.get('salary', ''),
             data.get('requirements', ''),
             data.get('description', ''),
-            data.get('benefits', '')
+            data.get('benefits', ''),
+            json.dumps(desensitized_data)
         )
     )
     conn.commit()
@@ -572,9 +634,9 @@ def delete_jd(jd_id):
     conn.close()
     return jsonify({'status': 'success', 'message': '职位描述删除成功'})
 
-# API: AI人岗匹配
-@app.route('/api/match', methods=['POST'])
-def ai_matching():
+# API: AI人岗撮合
+@app.route('/api/facilitate', methods=['POST'])
+def ai_facilitate():
     data = request.get_json()
     resume_id = data.get('resume_id')
     jd_id = data.get('jd_id')
@@ -582,44 +644,96 @@ def ai_matching():
     if not resume_id or not jd_id:
         return jsonify({'status': 'error', 'message': '请选择简历和职位'}), 400
     
-    # 模拟AI匹配逻辑
-    resume = next((r for r in resumes if r['id'] == resume_id), None)
-    jd = next((j for j in job_descriptions if j['id'] == jd_id), None)
+    conn = get_db_connection()
+    resume = conn.execute('SELECT * FROM resumes WHERE id = ?', (resume_id,)).fetchone()
+    jd = conn.execute('SELECT * FROM job_descriptions WHERE id = ?', (jd_id,)).fetchone()
     
     if not resume or not jd:
+        conn.close()
         return jsonify({'status': 'error', 'message': '找不到对应的简历或职位'}), 404
     
-    # 简单的匹配分数计算（实际项目中会使用AI模型）
+    # 简单的撮合分数计算（实际项目中会使用AI模型）
     import random
-    match_score = random.randint(60, 95)
+    facilitation_score = random.randint(60, 95)
     
-    match_result = {
-        'id': len(matches) + 1,
+    strengths = ['技能匹配度高', '经验符合要求', '学历背景相符']
+    improvements = ['某些技能需要加强', '相关项目经验可以更丰富']
+    recommendation = '推荐' if facilitation_score >= 80 else '一般推荐' if facilitation_score >= 70 else '不推荐'
+
+    # Store result in DB
+    cursor = conn.execute(
+        """
+        INSERT INTO facilitation_results (resume_id, jd_id, facilitation_score, strengths, improvements, recommendation)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (resume_id, jd_id, facilitation_score, json.dumps(strengths), json.dumps(improvements), recommendation)
+    )
+    conn.commit()
+    new_id = cursor.lastrowid
+    
+    # Fetch the newly created record to return
+    new_facilitation_result = conn.execute('SELECT * FROM facilitation_results WHERE id = ?', (new_id,)).fetchone()
+
+    conn.close()
+    
+    # Prepare data for JSON response
+    result_to_return = {
+        'id': new_facilitation_result['id'],
         'resume_id': resume_id,
         'jd_id': jd_id,
         'resume_name': resume['name'],
         'jd_title': jd['title'],
         'company': jd['company'],
-        'match_score': match_score,
-        'strengths': ['技能匹配度高', '经验符合要求', '学历背景相符'],
-        'improvements': ['某些技能需要加强', '相关项目经验可以更丰富'],
-        'recommendation': '推荐' if match_score >= 80 else '一般推荐' if match_score >= 70 else '不推荐'
+        'facilitation_score': facilitation_score,
+        'strengths': strengths,
+        'improvements': improvements,
+        'recommendation': recommendation,
+        'created_at': new_facilitation_result['created_at']
     }
     
-    matches.append(match_result)
-    
     return jsonify({
         'status': 'success',
-        'message': 'AI匹配完成',
-        'match': match_result
+        'message': 'AI撮合完成',
+        'facilitation': result_to_return
     })
 
-# API: 获取匹配历史
-@app.route('/api/matches')
-def get_matches():
+# API: 获取单个撮合历史
+@app.route('/api/facilitate/<int:facilitation_id>')
+def get_facilitation_result(facilitation_id):
+    conn = get_db_connection()
+    
+    query = """
+        SELECT
+            fr.*,
+            r.name as resume_name,
+            j.title as jd_title,
+            j.company as company
+        FROM facilitation_results fr
+        JOIN resumes r ON fr.resume_id = r.id
+        JOIN job_descriptions j ON fr.jd_id = j.id
+        WHERE fr.id = ?;
+    """
+    result = conn.execute(query, (facilitation_id,)).fetchone()
+    conn.close()
+
+    if not result:
+        return jsonify({'status': 'error', 'message': '找不到该撮合记录'}), 404
+
     return jsonify({
         'status': 'success',
-        'matches': matches
+        'facilitation': {
+            'id': result['id'],
+            'resume_id': result['resume_id'],
+            'jd_id': result['jd_id'],
+            'resume_name': result['resume_name'],
+            'jd_title': result['jd_title'],
+            'company': result['company'],
+            'facilitation_score': result['facilitation_score'],
+            'strengths': json.loads(result['strengths']),
+            'improvements': json.loads(result['improvements']),
+            'recommendation': result['recommendation'],
+            'created_at': result['created_at']
+        }
     })
 
 # API: Clear table

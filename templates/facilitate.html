@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+
+{% block title %}人岗撮合 - Talent Match{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <!-- Left Panel: History -->
+        <div class="col-lg-4">
+            <div class="card" style="height: 85vh;">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="bi bi-clock-history me-2"></i>撮合历史</h5>
+                </div>
+                <div id="facilitationHistoryList" class="list-group list-group-flush overflow-auto">
+                    {% if facilitation_history %}
+                        {% for item in facilitation_history %}
+                        <a href="#" class="list-group-item list-group-item-action" onclick="fetchFacilitationResult({{ item.id }})">
+                            <div class="d-flex w-100 justify-content-between">
+                                <h6 class="mb-1">{{ item.resume_name }} & {{ item.jd_title }}</h6>
+                            </div>
+                            <small class="text-muted">{{ item.created_at }}</small>
+                        </a>
+                        {% endfor %}
+                    {% else %}
+                        <div class="text-center p-5">
+                            <p class="text-muted">暂无历史记录</p>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Panel: Action and Results -->
+        <div class="col-lg-8">
+            <!-- New Facilitation Card -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-magic me-2"></i>发起新撮合</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="resumeSelect" class="form-label"><strong>选择简历</strong></label>
+                            <select id="resumeSelect" class="form-select">
+                                <option selected disabled>-- 请选择一份简历 --</option>
+                                {% for resume in resumes %}
+                                    <option value="{{ resume.id }}">ID: {{ resume.id }} - {{ resume.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="jdSelect" class="form-label"><strong>选择职位</strong></label>
+                            <select id="jdSelect" class="form-select">
+                                <option selected disabled>-- 请选择一个职位 --</option>
+                                {% for jd in job_descriptions %}
+                                    <option value="{{ jd.id }}">ID: {{ jd.id }} - {{ jd.title }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                    <button class="btn btn-primary w-100" onclick="runFacilitation()">
+                        <i class="bi bi-play-circle me-1"></i>开始AI撮合
+                    </button>
+                </div>
+            </div>
+
+            <!-- Result Card -->
+            <div id="facilitationResultContainer" class="card d-none">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">撮合结果</h5>
+                    <span id="facilitationScore" class="badge bg-primary fs-6 rounded-pill"></span>
+                </div>
+                <div class="card-body">
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <h6><i class="bi bi-file-person me-2"></i>候选人: <span id="resultResumeName" class="fw-normal"></span></h6>
+                        </div>
+                        <div class="col-md-6">
+                            <h6><i class="bi bi-briefcase me-2"></i>职位: <span id="resultJdTitle" class="fw-normal"></span></h6>
+                        </div>
+                    </div>
+                    <hr>
+                    <div class="row mt-3">
+                        <div class="col-md-6">
+                            <div class="card h-100 shadow-sm">
+                                <div class="card-header bg-success-subtle text-success-emphasis">
+                                    <strong><i class="bi bi-check-circle me-2"></i>优势 (Strengths)</strong>
+                                </div>
+                                <ul id="resultStrengths" class="list-group list-group-flush"></ul>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                             <div class="card h-100 shadow-sm">
+                                <div class="card-header bg-warning-subtle text-warning-emphasis">
+                                    <strong><i class="bi bi-arrow-up-circle me-2"></i>可提升项 (Improvements)</strong>
+                                </div>
+                                <ul id="resultImprovements" class="list-group list-group-flush"></ul>
+                            </div>
+                        </div>
+                    </div>
+                     <div class="mt-4 text-center">
+                        <h5 class="mb-0">综合建议: <span id="resultRecommendation" class="text-primary fw-bold"></span></h5>
+                    </div>
+                </div>
+            </div>
+            <div id="facilitationPlaceholder" class="text-center py-5">
+                 <i class="bi bi-people display-1 text-muted"></i>
+                <h4 class="mt-3 text-muted">请选择简历和职位发起新撮合，或查看历史记录</h4>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentToast = null;
+
+function showToast(message, type = 'primary', duration = 3000) {
+    // Hide any existing toast
+    if (currentToast) {
+        currentToast.hide();
+    }
+    
+    // Create toast element
+    const toastContainer = document.getElementById('toast-container');
+    if (!toastContainer) {
+        console.error('Toast container not found!');
+        return;
+    }
+
+    const toastId = `toast-${Date.now()}`;
+    const toastHTML = `
+        <div id="${toastId}" class="toast align-items-center text-bg-${type} border-0" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="d-flex">
+                <div class="toast-body">${message}</div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+        </div>
+    `;
+    toastContainer.insertAdjacentHTML('beforeend', toastHTML);
+    
+    const toastElement = document.getElementById(toastId);
+    const toast = new bootstrap.Toast(toastElement, {
+        delay: duration === 0 ? false : duration,
+        autohide: duration !== 0
+    });
+
+    toastElement.addEventListener('hidden.bs.toast', () => {
+        toastElement.remove();
+        if (currentToast === toast) {
+            currentToast = null;
+        }
+    });
+    
+    toast.show();
+    currentToast = toast;
+    return toast; // Return toast instance to allow manual hiding
+}
+
+function runFacilitation() {
+    const resumeId = document.getElementById('resumeSelect').value;
+    const jdId = document.getElementById('jdSelect').value;
+
+    if (!resumeId || !jdId || resumeId.includes('请选择') || jdId.includes('请选择')) {
+        showToast('请同时选择简历和职位', 'warning');
+        return;
+    }
+
+    const facilitationToast = showToast('AI撮合中，请稍候...', 'primary', 0);
+
+    fetch('/api/facilitate', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ resume_id: parseInt(resumeId), jd_id: parseInt(jdId) })
+    })
+    .then(response => response.json())
+    .then(data => {
+        facilitationToast.hide();
+        if (data.status === 'success') {
+            displayFacilitationResult(data.facilitation);
+            // Add to history list
+            const historyList = document.getElementById('facilitationHistoryList');
+            const newHistoryItem = `
+                <a href="#" class="list-group-item list-group-item-action" onclick="fetchFacilitationResult(${data.facilitation.id})">
+                    <div class="d-flex w-100 justify-content-between">
+                        <h6 class="mb-1">${data.facilitation.resume_name} & ${data.facilitation.jd_title}</h6>
+                    </div>
+                    <small class="text-muted">${new Date().toISOString()}</small>
+                </a>
+            `;
+            historyList.insertAdjacentHTML('afterbegin', newHistoryItem);
+        } else {
+            showToast('撮合失败: ' + data.message, 'danger');
+        }
+    })
+    .catch(error => {
+        facilitationToast.hide();
+        showToast('操作失败: ' + error, 'danger');
+    });
+}
+
+function fetchFacilitationResult(facilitationId) {
+    const loadingToast = showToast('正在加载历史记录...', 'info', 0);
+    fetch(`/api/facilitate/${facilitationId}`)
+    .then(response => response.json())
+    .then(data => {
+        loadingToast.hide();
+        if (data.status === 'success') {
+            displayFacilitationResult(data.facilitation);
+        } else {
+            showToast('加载失败: ' + data.message, 'danger');
+        }
+    })
+    .catch(error => {
+        loadingToast.hide();
+        showToast('操作失败: ' + error, 'danger');
+    });
+}
+
+function displayFacilitationResult(result) {
+    document.getElementById('facilitationPlaceholder').classList.add('d-none');
+    document.getElementById('facilitationResultContainer').classList.remove('d-none');
+
+    document.getElementById('facilitationScore').innerText = `撮合分数: ${result.facilitation_score}`;
+    document.getElementById('resultResumeName').innerText = result.resume_name;
+    document.getElementById('resultJdTitle').innerText = `${result.jd_title} @ ${result.company}`;
+    document.getElementById('resultRecommendation').innerText = result.recommendation;
+
+    const strengthsList = document.getElementById('resultStrengths');
+    strengthsList.innerHTML = '';
+    result.strengths.forEach(item => {
+        const li = document.createElement('li');
+        li.className = 'list-group-item';
+        li.innerText = item;
+        strengthsList.appendChild(li);
+    });
+
+    const improvementsList = document.getElementById('resultImprovements');
+    improvementsList.innerHTML = '';
+    result.improvements.forEach(item => {
+        const li = document.createElement('li');
+        li.className = 'list-group-item';
+        li.innerText = item;
+        improvementsList.appendChild(li);
+    });
+}
+</script>
+{% endblock %} 

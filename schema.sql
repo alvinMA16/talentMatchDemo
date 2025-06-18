@@ -1,5 +1,6 @@
 DROP TABLE IF EXISTS resumes;
 DROP TABLE IF EXISTS job_descriptions;
+DROP TABLE IF EXISTS facilitation_results;
 
 CREATE TABLE resumes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,5 +28,19 @@ CREATE TABLE job_descriptions (
     requirements TEXT,
     description TEXT,
     benefits TEXT,
+    desensitized_json TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE facilitation_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    resume_id INTEGER,
+    jd_id INTEGER,
+    facilitation_score INTEGER,
+    strengths TEXT,
+    improvements TEXT,
+    recommendation TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (resume_id) REFERENCES resumes (id) ON DELETE CASCADE,
+    FOREIGN KEY (jd_id) REFERENCES job_descriptions (id) ON DELETE CASCADE
 ); 
