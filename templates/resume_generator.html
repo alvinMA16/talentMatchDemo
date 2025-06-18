@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+
+{% block title %}AI 简历生成 - Talent Match{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <!-- Left Panel: Chat (Sticky) -->
+        <div class="col-lg-5">
+            <div style="position: sticky; top: 80px;">
+                <div class="card" style="height: calc(100vh - 100px);">
+                    <div class="card-header bg-light py-3">
+                        <h5 class="mb-0"><i class="bi bi-chat-dots me-2"></i>Let's make your resume great again!</h5>
+                    </div>
+                    <div id="chat-window" class="card-body overflow-auto">
+                        <!-- Chat messages will be appended here -->
+                        <div class="d-flex flex-row justify-content-start mb-3">
+                            <img src="{{ url_for('static', filename='images/assistant.png') }}" alt="assistant avatar" style="width: 40px; height: 40px;">
+                            <div class="p-3 ms-3" style="border-radius: 5px 15px 15px 15px; background-color: #f1f0f0;">
+                                <p class="small mb-0">你好！我是一个专业的简历生成助理。请告诉我你的姓名和期望的职位，我们可以从这里开始。</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-footer">
+                        <div id="chat-input-spinner" class="text-center d-none">
+                            <div class="spinner-border spinner-border-sm" role="status">
+                                <span class="visually-hidden">思考中...</span>
+                            </div>
+                        </div>
+                        <div class="input-group">
+                            <input type="text" id="user-input" class="form-control" placeholder="输入你的信息..." autocomplete="off">
+                            <button class="btn btn-primary" type="button" id="send-button" onclick="sendMessage()">
+                                <i class="bi bi-send"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Panel: A4 Resume Preview -->
+        <div class="col-lg-7">
+            <div class="card">
+                <div class="card-header bg-light d-flex justify-content-between align-items-center py-3">
+                    <h5 class="mb-0"><i class="bi bi-file-earmark-person me-2"></i>简历预览</h5>
+                    <button class="btn btn-success btn-sm" onclick="saveResume()"><i class="bi bi-save me-1"></i>保存简历</button>
+                </div>
+                <div class="card-body bg-secondary d-flex justify-content-center align-items-start p-3">
+                    <div id="a4-preview-container" class="bg-white shadow-lg">
+                        <iframe id="resume-preview-iframe" srcdoc="<p class='p-5 text-muted text-center'>请开始对话，简历将在此处实时生成...</p>" frameborder="0"></iframe>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    #a4-preview-container {
+        width: 210mm;
+        height: 297mm;
+        transform-origin: top left;
+        overflow: hidden;
+    }
+    #resume-preview-iframe {
+        width: 100%;
+        height: 100%;
+    }
+    /* Simple scaling for different screen sizes */
+    @media (max-width: 1400px) {
+        #a4-preview-container {
+            transform: scale(0.7);
+        }
+    }
+     @media (max-width: 1200px) {
+        #a4-preview-container {
+            transform: scale(0.6);
+        }
+    }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let chatHistory = []; // To store the conversation history
+
+// Send message to backend
+function sendMessage() {
+    const userInput = document.getElementById('user-input');
+    const message = userInput.value.trim();
+    if (message === '') return;
+
+    appendMessage(message, 'user');
+    userInput.value = '';
+    toggleSpinner(true);
+
+    fetch('/api/resume/generate_chat', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            message: message,
+            history: chatHistory
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        toggleSpinner(false);
+        if (data.status === 'success') {
+            chatHistory = data.history; // Update history
+            handleAIResponse(data.response);
+        } else {
+            appendMessage(`错误: ${data.message}`, 'error');
+        }
+    })
+    .catch(error => {
+        toggleSpinner(false);
+        appendMessage(`请求失败: ${error}`, 'error');
+    });
+}
+
+// Handle the AI's response object
+function handleAIResponse(response) {
+    if (response.type === 'chat_message') {
+        appendMessage(response.text, 'assistant');
+    } else if (response.type === 'resume_html') {
+        appendMessage("简历已生成！请在右侧预览。", 'assistant');
+        updateResumePreview(response.html_content);
+    }
+}
+
+// Append a message to the chat window
+function appendMessage(message, sender) {
+    const chatWindow = document.getElementById('chat-window');
+    let messageHtml = '';
+
+    if (sender === 'user') {
+        messageHtml = `
+            <div class="d-flex flex-row justify-content-end mb-3">
+                <div class="p-3 me-3 text-white" style="border-radius: 15px 5px 15px 15px; background-color: #0d6efd;">
+                    <p class="small mb-0">${message}</p>
+                </div>
+                <img src="{{ url_for('static', filename='images/user.png') }}" alt="user avatar" style="width: 40px; height: 40px;">
+            </div>
+        `;
+    } else if (sender === 'assistant') {
+        messageHtml = `
+            <div class="d-flex flex-row justify-content-start mb-3">
+                <img src="{{ url_for('static', filename='images/assistant.png') }}" alt="assistant avatar" style="width: 40px; height: 40px;">
+                <div class="p-3 ms-3" style="border-radius: 5px 15px 15px 15px; background-color: #f1f0f0;">
+                    <p class="small mb-0">${message}</p>
+                </div>
+            </div>
+        `;
+    } else { // Error case
+         messageHtml = `
+            <div class="d-flex flex-row justify-content-start mb-3">
+                 <img src="{{ url_for('static', filename='images/assistant.png') }}" alt="assistant avatar" style="width: 40px; height: 40px;">
+                <div class="p-3 ms-3 bg-danger-subtle text-danger-emphasis" style="border-radius: 15px;">
+                    <p class="small mb-0">${message}</p>
+                </div>
+            </div>
+        `;
+    }
+    
+    chatWindow.insertAdjacentHTML('beforeend', messageHtml);
+    chatWindow.scrollTop = chatWindow.scrollHeight; // Scroll to bottom
+}
+
+// Update the iframe with the new resume HTML
+function updateResumePreview(htmlContent) {
+    const iframe = document.getElementById('resume-preview-iframe');
+    iframe.srcdoc = htmlContent;
+}
+
+// Show/hide the loading spinner
+function toggleSpinner(show) {
+    const spinner = document.getElementById('chat-input-spinner');
+    const inputGroup = document.querySelector('.input-group');
+    if (show) {
+        spinner.classList.remove('d-none');
+        inputGroup.classList.add('d-none');
+    } else {
+        spinner.classList.add('d-none');
+        inputGroup.classList.remove('d-none');
+    }
+}
+
+function saveResume() {
+    const iframe = document.getElementById('resume-preview-iframe');
+    const resumeHtml = iframe.srcdoc;
+    
+    if (!resumeHtml || !resumeHtml.includes('<html>')) {
+        showToast('没有可保存的简历。', 'warning');
+        return;
+    }
+    
+    // Here we would normally parse the HTML to extract the JSON data
+    // and send it to the /api/resume endpoint.
+    // For this demo, we'll just show a placeholder message.
+    showToast('保存功能正在开发中...', 'info');
+    
+    // TODO: Implement a function to parse HTML back to the JSON structure
+    // required by the /api/resume endpoint, then make the fetch call.
+}
+
+document.getElementById('user-input').addEventListener('keypress', function (e) {
+    if (e.key === 'Enter') {
+        e.preventDefault(); // Prevent form submission
+        sendMessage();
+    }
+});
+</script>
+{% endblock %} 

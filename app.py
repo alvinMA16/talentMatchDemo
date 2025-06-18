@@ -1,12 +1,19 @@
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, Response
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file FIRST
+load_dotenv()
+
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, Response
 import json
 import sqlite3
 import pathlib
 import google.generativeai as genai
-from dotenv import load_dotenv
 import pandas as pd
 import io
+from werkzeug.utils import secure_filename
+from helpers import get_prompt, get_db_connection, check_and_migrate_db
+from resume_generator import resume_generator_bp
 
 # --- Database Setup ---
 DATABASE = 'talent_match.db'
@@ -75,17 +82,11 @@ def get_desensitized_jd_version(jd_data):
         return jd_data
 
 def get_prompt(filename):
-    """Reads a prompt from the prompts directory."""
-    PROMPT_DIR = 'prompts'
-    file_path = os.path.join(PROMPT_DIR, filename)
+    """Loads a prompt from the prompts directory."""
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(f'prompts/{filename}', 'r', encoding='utf-8') as f:
             return f.read()
     except FileNotFoundError:
-        print(f"Error: Prompt file not found at '{file_path}'")
-        return None
-    except Exception as e:
-        print(f"Error reading prompt file '{file_path}': {e}")
         return None
 
 def init_db():
@@ -94,94 +95,6 @@ def init_db():
         conn.executescript(f.read())
     conn.close()
     print("Database initialized.")
-
-def check_and_migrate_db():
-    """Checks if the database schema is up-to-date and applies migrations if not."""
-    print("Checking database schema...")
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        # Get the columns of the resumes table
-        cursor.execute("PRAGMA table_info(resumes)")
-        columns = [row[1] for row in cursor.fetchall()]
-
-        # Check for publications_json column
-        if 'publications_json' not in columns:
-            print("Database migration: Adding 'publications_json' column...")
-            cursor.execute("ALTER TABLE resumes ADD COLUMN publications_json TEXT")
-        
-        # Check for projects_json column
-        if 'projects_json' not in columns:
-            print("Database migration: Adding 'projects_json' column...")
-            cursor.execute("ALTER TABLE resumes ADD COLUMN projects_json TEXT")
-
-        # Check for desensitized_json column
-        if 'desensitized_json' not in columns:
-            print("Database migration: Adding 'desensitized_json' column...")
-            cursor.execute("ALTER TABLE resumes ADD COLUMN desensitized_json TEXT")
-
-        # Check for job_descriptions table
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='job_descriptions'")
-        if cursor.fetchone() is None:
-            print("Database migration: Creating 'job_descriptions' table...")
-            cursor.execute("""
-                CREATE TABLE job_descriptions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    title TEXT NOT NULL,
-                    company TEXT,
-                    location TEXT,
-                    salary TEXT,
-                    requirements TEXT,
-                    description TEXT,
-                    benefits TEXT,
-                    desensitized_json TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-
-        # Check for desensitized_json column in job_descriptions table
-        cursor.execute("PRAGMA table_info(job_descriptions)")
-        jd_columns = [row[1] for row in cursor.fetchall()]
-        if 'desensitized_json' not in jd_columns:
-            print("Database migration: Adding 'desensitized_json' column to job_descriptions...")
-            cursor.execute("ALTER TABLE job_descriptions ADD COLUMN desensitized_json TEXT")
-
-        # Check for facilitation_results table
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='facilitation_results'")
-        if cursor.fetchone() is None:
-            print("Database migration: Creating 'facilitation_results' table...")
-            cursor.execute("""
-                CREATE TABLE facilitation_results (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    resume_id INTEGER,
-                    jd_id INTEGER,
-                    facilitation_score INTEGER,
-                    strengths TEXT,
-                    improvements TEXT,
-                    recommendation TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (resume_id) REFERENCES resumes (id) ON DELETE CASCADE,
-                    FOREIGN KEY (jd_id) REFERENCES job_descriptions (id) ON DELETE CASCADE
-                )
-            """)
-
-        conn.commit()
-        print("Database schema is up-to-date.")
-    except sqlite3.Error as e:
-        print(f"Database migration failed: {e}")
-    finally:
-        conn.close()
-
-# Call this function once to create your DB file and table
-def try_init_db():
-    if not os.path.exists(DATABASE):
-        init_db()
-    else:
-        # If DB exists, check if it needs migration
-        check_and_migrate_db()
-
-# 加载环境变量
-load_dotenv()
 
 # 配置GenAI
 try:
@@ -194,6 +107,20 @@ except KeyError:
 # 创建Flask应用实例
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'talent-match-secret-key'
+
+# Define constants
+UPLOAD_FOLDER = 'uploads'
+ALLOWED_EXTENSIONS = {'txt', 'pdf', 'json', 'xlsx'}
+
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB
+
+# Register Blueprints
+app.register_blueprint(resume_generator_bp)
+
+# Initialize and migrate database
+with app.app_context():
+    check_and_migrate_db()
 
 # 模拟数据存储
 resumes = []
@@ -771,6 +698,5 @@ def not_found(error):
     return render_template('404.html'), 404
 
 if __name__ == '__main__':
-    try_init_db()
     # 开发环境运行配置
     app.run(debug=True, host='0.0.0.0', port=8000) 
