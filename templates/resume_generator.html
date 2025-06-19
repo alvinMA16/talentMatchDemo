@@ -273,9 +273,8 @@ function toggleSpinner(show) {
 function exportToPdf() {
     const iframe = document.getElementById('resume-preview-iframe');
     const resumeDocument = iframe.contentWindow.document;
-    const resumeHtml = resumeDocument.body;
-
-    if (!resumeHtml || !resumeDocument.querySelector('body > *')) {
+    
+    if (!resumeDocument || !resumeDocument.querySelector('body > *')) {
         showToast('没有可导出的简历内容。', 'warning');
         return;
     }
@@ -289,22 +288,78 @@ function exportToPdf() {
         filename = `${nameElement.textContent.trim()}_resume.pdf`;
     }
 
-    const opt = {
-      margin:       0,
-      filename:     filename,
-      image:        { type: 'jpeg', quality: 0.98 },
-      html2canvas:  { scale: 2, useCORS: true },
-      jsPDF:        { unit: 'in', format: 'a4', orientation: 'portrait' }
-    };
+    // Get the raw HTML content from iframe's srcdoc
+    const iframe_element = document.getElementById('resume-preview-iframe');
+    const htmlContent = iframe_element.srcdoc;
+    
+    if (!htmlContent) {
+        showToast('无法获取简历内容。', 'warning');
+        return;
+    }
 
-    html2pdf().from(resumeHtml).set(opt).save()
-        .then(() => {
-            showToast('PDF 导出成功!', 'success');
-        })
-        .catch((error) => {
-            console.error('PDF export error:', error);
-            showToast('PDF 导出失败，请查看控制台获取详情。', 'danger');
-        });
+    // Create a temporary element with the exact same HTML
+    const tempContainer = document.createElement('div');
+    tempContainer.innerHTML = htmlContent;
+    
+    // Find the actual content (skip html, head tags since we're putting it in a div)
+    const bodyContent = tempContainer.querySelector('body');
+    if (bodyContent) {
+        // Extract styles from head
+        const headContent = tempContainer.querySelector('head');
+        const styles = headContent ? headContent.innerHTML : '';
+        
+        // Create a clean container with styles applied
+        const cleanContainer = document.createElement('div');
+        cleanContainer.innerHTML = `<style>${styles}</style>${bodyContent.innerHTML}`;
+        
+        const opt = {
+            margin: [0.5, 0.5, 0.5, 0.5],
+            filename: filename,
+            image: { type: 'jpeg', quality: 0.98 },
+            html2canvas: { 
+                scale: 2, 
+                useCORS: true, 
+                allowTaint: true,
+                backgroundColor: '#ffffff'
+            },
+            jsPDF: { unit: 'in', format: 'a4', orientation: 'portrait' }
+        };
+
+        html2pdf().from(cleanContainer).set(opt).save()
+            .then(() => {
+                showToast('PDF 导出成功!', 'success');
+            })
+            .catch((error) => {
+                console.error('PDF export error:', error);
+                showToast('PDF 导出失败，请查看控制台获取详情。', 'danger');
+            });
+    } else {
+        // Fallback: use the entire HTML as-is
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(htmlContent, 'text/html');
+        
+        const opt = {
+            margin: [0.5, 0.5, 0.5, 0.5],
+            filename: filename,
+            image: { type: 'jpeg', quality: 0.98 },
+            html2canvas: { 
+                scale: 2, 
+                useCORS: true, 
+                allowTaint: true,
+                backgroundColor: '#ffffff'
+            },
+            jsPDF: { unit: 'in', format: 'a4', orientation: 'portrait' }
+        };
+
+        html2pdf().from(doc.body).set(opt).save()
+            .then(() => {
+                showToast('PDF 导出成功!', 'success');
+            })
+            .catch((error) => {
+                console.error('PDF export error:', error);
+                showToast('PDF 导出失败，请查看控制台获取详情。', 'danger');
+            });
+    }
 }
 
 function saveResume() {
