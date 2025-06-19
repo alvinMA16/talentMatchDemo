@@ -1,6 +1,6 @@
 import os
 import json
-from flask import Blueprint, render_template, request, jsonify
+from flask import Blueprint, render_template, request, jsonify, Response
 from openai import OpenAI
 from helpers import get_prompt, get_db_connection
 
@@ -50,30 +50,6 @@ def find_candidate_by_id_or_name(candidate_id=None, name=None):
         print(f"--- [Tool Error] {e} ---")
         return json.dumps({"error": str(e)})
 
-tools = [
-    {
-        "type": "function",
-        "function": {
-            "name": "find_candidate_by_id_or_name",
-            "description": "根据候选人的ID或姓名，从数据库获取该候选人的详细背景信息。优先使用ID查询。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "candidate_id": {
-                        "type": "integer",
-                        "description": "要查询的候选人的唯一ID, e.g., 1"
-                    },
-                    "name": {
-                        "type": "string",
-                        "description": "要查询的候选人的姓名, e.g., '张三'"
-                    }
-                },
-                "required": [] # No single field is strictly required, but the logic handles one or the other
-            }
-        }
-    }
-]
-
 @resume_generator_bp.route('/resume/generate')
 def resume_generation_page():
     """Renders the resume generation page."""
@@ -81,86 +57,97 @@ def resume_generation_page():
 
 @resume_generator_bp.route('/api/resume/generate_chat', methods=['POST'])
 def resume_generate_chat_api():
-    """API endpoint for the resume generation chat with tool-calling capability."""
+    """API endpoint for the resume generation chat with a structured output agent.
+    This endpoint uses streaming to send back each step of the agent's process.
+    """
     data = request.get_json()
     user_message = data.get('message')
     history = data.get('history', [])
-
+    
     if not user_message:
-        return jsonify({'status': 'error', 'message': 'No message provided'}), 400
+        # This case should ideally not be hit with the current frontend, but as a safeguard:
+        return Response(json.dumps({'status': 'error', 'message': 'No message provided'}), status=400, mimetype='application/json')
 
-    messages = []
-    if not history:
+    def stream_response():
+        max_turns = 5 # Prevent infinite loops
+        
+        # --- Message History Setup ---
         system_prompt = get_prompt('generate_resume_chat.txt')
         if not system_prompt:
-            return jsonify({'status': 'error', 'message': 'Could not load prompt.'}), 500
-        messages.append({'role': 'system', 'content': system_prompt})
-    else:
-        for item in history:
-            messages.append({'role': item['role'], 'content': item['parts'][0]})
+            error_message = {'status': 'error', 'message': 'Could not load system prompt.'}
+            yield json.dumps(error_message) + '\n\n'
+            return
 
-    messages.append({'role': 'user', 'content': user_message})
-    
-    try:
-        print("--- OpenAI API Request (1st call) ---")
-        print(json.dumps(messages, indent=2, ensure_ascii=False))
-
-        response = client.chat.completions.create(
-            model="o4-mini",
-            messages=messages,
-            tools=tools,
-            tool_choice="auto"
-        )
+        messages = [{'role': 'system', 'content': system_prompt}]
+        if history:
+            for item in history:
+                if 'role' in item and 'parts' in item and item['parts']:
+                    content = item['parts'][0]
+                    messages.append({'role': item['role'], 'content': content})
         
-        response_message = response.choices[0].message
-        print("--- OpenAI API Response (1st call) ---")
-        print(response_message)
+        # Add the current user message to the history for the agent
+        messages.append({'role': 'user', 'content': user_message})
         
-        tool_calls = response_message.tool_calls
+        try:
+            for turn in range(max_turns):
+                print(f"--- Agent Turn {turn + 1} ---")
 
-        if tool_calls:
-            messages.append(response_message.model_dump())
-            available_functions = {"find_candidate_by_id_or_name": find_candidate_by_id_or_name}
-            
-            for tool_call in tool_calls:
-                function_name = tool_call.function.name
-                function_to_call = available_functions[function_name]
-                function_args = json.loads(tool_call.function.arguments)
-                function_response = function_to_call(**function_args)
-                messages.append({
-                    "tool_call_id": tool_call.id,
-                    "role": "tool",
-                    "name": function_name,
-                    "content": function_response,
-                })
-            
-            print("--- OpenAI API Request (2nd call with tool response) ---")
-            print(json.dumps(messages, indent=2, ensure_ascii=False))
+                response = client.chat.completions.create(
+                    model="o4-mini",
+                    messages=messages,
+                    response_format={"type": "json_object"}
+                )
+                
+                response_content = response.choices[0].message.content
+                
+                # Stream the raw OpenAI response to the client
+                yield response_content + '\n\n'
 
-            second_response = client.chat.completions.create(
-                model="o4-mini",
-                messages=messages,
-                response_format={"type": "json_object"}
-            )
-            final_response_message = second_response.choices[0].message
-            print("--- OpenAI API Response (2nd call) ---")
-            print(final_response_message)
-            ai_response_text = final_response_message.content
-        else:
-            ai_response_text = response_message.content
+                # Add the AI's full action JSON to the history for the next turn
+                messages.append({'role': 'assistant', 'content': response_content})
+                
+                try:
+                    response_json = json.loads(response_content)
+                    ai_action = response_json.get("action", {})
+                    action_type = ai_action.get("type")
+                    payload = ai_action.get("payload")
+                except (json.JSONDecodeError, AttributeError):
+                    # If parsing fails, we can't continue the loop logically.
+                    break
 
-        ai_response_data = json.loads(ai_response_text)
+                if action_type in ["thought", "tool_call", "generate_resume"]:
+                    print(f"--- Action: Intermediate Step ({action_type}) ---")
 
-        updated_history = list(history)
-        updated_history.append({'role': 'user', 'parts': [user_message]})
-        updated_history.append({'role': 'assistant', 'parts': [ai_response_text]})
-        
-        return jsonify({
-            'status': 'success',
-            'response': ai_response_data,
-            'history': updated_history
-        })
+                    # Handle tool call specifically as it adds a new message to the history
+                    if action_type == "tool_call":
+                        if payload:
+                            function_name = payload.get("function_name")
+                            if function_name == "find_candidate_by_id_or_name":
+                                tool_result = find_candidate_by_id_or_name(**payload.get("parameters", {}))
+                                
+                                # Add tool result and stream it.
+                                # The role MUST be 'assistant' for the model to understand the response.
+                                tool_message = {"role": "assistant", "content": tool_result}
+                                messages.append(tool_message)
+                                yield json.dumps(tool_message) + '\n\n'
+                    
+                    # For 'thought' and 'generate_resume', the assistant message is already in history.
+                    # We just continue to the next turn.
+                    continue
+                else:
+                    # This covers chat_message, final_message, and any unknown types
+                    print(f"--- Action: Breaking action ({action_type}) ---")
+                    break
 
-    except Exception as e:
-        print(f"Error during resume generation chat with OpenAI: {e}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500 
+        except Exception as e:
+            print(f"Error during resume generation stream: {e}")
+            error_message = {
+                "reasoning": "发生了一个内部错误。",
+                "action": {
+                    "type": "chat_message",
+                    "payload": {"text": f"抱歉，处理您的请求时出现错误: {e}"}
+                }
+            }
+            yield json.dumps(error_message) + '\n\n'
+
+    return Response(stream_response(), mimetype='application/x-ndjson') 

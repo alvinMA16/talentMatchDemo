@@ -13,7 +13,7 @@
                         <h5 class="mb-0"><i class="bi bi-chat-dots me-2"></i>Let's make your resume great again!</h5>
                     </div>
                     <div id="chat-window" class="card-body overflow-auto">
-                        <!-- Chat messages will be appended here -->
+                        <!-- Static initial greeting -->
                         <div class="d-flex flex-row justify-content-start mb-3">
                             <img src="{{ url_for('static', filename='images/assistant.png') }}" alt="assistant avatar" style="width: 40px; height: 40px;">
                             <div class="p-3 ms-3" style="border-radius: 5px 15px 15px 15px; background-color: #f1f0f0;">
@@ -83,7 +83,7 @@
 
 {% block scripts %}
 <script>
-let chatHistory = []; // To store the conversation history
+let chatHistory = []; 
 
 // Send message to backend
 function sendMessage() {
@@ -95,6 +95,10 @@ function sendMessage() {
     userInput.value = '';
     toggleSpinner(true);
 
+    // Add user message to local history immediately for responsiveness
+    chatHistory.push({ role: 'user', parts: [message] });
+
+    // Fetch call to the streaming agent
     fetch('/api/resume/generate_chat', {
         method: 'POST',
         headers: {
@@ -102,18 +106,40 @@ function sendMessage() {
         },
         body: JSON.stringify({
             message: message,
-            history: chatHistory
+            history: chatHistory.slice(0, -1) // Send history *before* the current message
         })
     })
-    .then(response => response.json())
-    .then(data => {
-        toggleSpinner(false);
-        if (data.status === 'success') {
-            chatHistory = data.history; // Update history
-            handleAIResponse(data.response);
-        } else {
-            appendMessage(`错误: ${data.message}`, 'error');
+    .then(response => {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        function processStream() {
+            reader.read().then(({ done, value }) => {
+                if (done) {
+                    toggleSpinner(false);
+                    return;
+                }
+
+                buffer += decoder.decode(value, { stream: true });
+                const parts = buffer.split('\n\n');
+                
+                parts.slice(0, -1).forEach(part => {
+                    if (part.trim()) {
+                        handleStreamPart(part);
+                    }
+                });
+
+                buffer = parts[parts.length - 1];
+                
+                processStream();
+            }).catch(error => {
+                console.error('Stream reading error:', error);
+                toggleSpinner(false);
+                appendMessage(`读取响应流时出错: ${error}`, 'error');
+            });
         }
+        processStream();
     })
     .catch(error => {
         toggleSpinner(false);
@@ -121,14 +147,70 @@ function sendMessage() {
     });
 }
 
-// Handle the AI's response object
-function handleAIResponse(response) {
-    if (response.type === 'chat_message') {
-        appendMessage(response.text, 'assistant');
-    } else if (response.type === 'resume_html') {
-        appendMessage("简历已生成！请在右侧预览。", 'assistant');
-        updateResumePreview(response.html_content);
+// Renders a single chunk of data from the stream
+function handleStreamPart(part) {
+    try {
+        const historyItem = JSON.parse(part);
+        
+        // Add the agent's response to our local history
+        chatHistory.push({ role: 'assistant', parts: [part] });
+
+        // Now render it
+        renderAgentStep(historyItem);
+
+    } catch (e) {
+        console.error('Failed to parse stream part:', part, e);
     }
+}
+
+// Renders a single step from the agent's response history
+function renderAgentStep(agentResponse) {
+    if (agentResponse.role === 'tool') {
+        // This is a tool result streamed back from the server.
+        // We just show a reasoning message and do not display the raw content in a bubble.
+        appendReasoning("工具调用完成，正在分析返回结果...");
+        console.log("Tool result:", JSON.parse(agentResponse.content)); // Log for debugging
+        return; // Stop further processing for this chunk
+    }
+
+    // This handles 'assistant' role messages
+    const reasoning = agentResponse.reasoning;
+    const action = agentResponse.action;
+
+    if (reasoning) {
+        appendReasoning(reasoning);
+    }
+
+    if (action) {
+        if (action.type === 'chat_message') {
+            appendMessage(action.payload.text, 'assistant');
+        } else if (action.type === 'generate_resume') {
+            // The prompt now requires the agent to follow this with a chat_message,
+            // so we just need to render the preview.
+            updateResumePreview(action.payload.html_content);
+        } else if (action.type === 'final_message') {
+            appendMessage(action.payload.text, 'assistant');
+            // Disable input to signify the end of the conversation
+            document.getElementById('user-input').disabled = true;
+            document.getElementById('send-button').disabled = true;
+        } else if (action.type === 'thought' || action.type === 'tool_call') {
+            // The reasoning is displayed, which is enough for these intermediate steps.
+        }
+    }
+}
+
+// Append a reasoning message to the chat window
+function appendReasoning(reasoning) {
+    const chatWindow = document.getElementById('chat-window');
+    const reasoningHtml = `
+        <div class="d-flex justify-content-start mb-2">
+            <div class="px-3 py-1 text-muted" style="font-size: 0.75rem; background-color: #f8f9fa; border-radius: 8px; font-style: italic; margin-left: 50px;">
+                <i class="bi bi-robot me-1"></i> ${reasoning}
+            </div>
+        </div>
+    `;
+    chatWindow.insertAdjacentHTML('beforeend', reasoningHtml);
+    chatWindow.scrollTop = chatWindow.scrollHeight; // Scroll to bottom
 }
 
 // Append a message to the chat window
@@ -249,5 +331,25 @@ document.getElementById('user-input').addEventListener('keypress', function (e) 
         sendMessage();
     }
 });
+
+// Helper to escape HTML for rendering inside <code> tags
+function escapeHtml(unsafe) {
+    return unsafe
+         .replace(/&/g, "&amp;")
+         .replace(/</g, "&lt;")
+         .replace(/>/g, "&gt;")
+         .replace(/"/g, "&quot;")
+         .replace(/'/g, "&#039;");
+}
+
+// Helper to find the last index of an element in an array
+function findLastIndex(arr, callback) {
+    for (let i = arr.length - 1; i >= 0; i--) {
+        if (callback(arr[i], i, arr)) {
+            return i;
+        }
+    }
+    return -1;
+}
 </script>
 {% endblock %} 
