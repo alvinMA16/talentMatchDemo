@@ -96,16 +96,43 @@ def resume_generate_chat_api():
             for turn in range(max_turns):
                 log_processing_step("AGENT_TURN", "START", f"Turn {turn + 1}/{max_turns}")
 
-                # Log model request
+                # Log model request with full context
                 log_model_request("o4-mini", "RESUME_GENERATION_CHAT", f"Turn {turn + 1}: {len(messages)} messages in history")
+                
+                # Log the complete request parameters
+                request_params = {
+                    "model": "o4-mini",
+                    "messages": messages,
+                    "response_format": {"type": "json_object"}
+                }
+                log_processing_step("MODEL_REQUEST_PARAMS", "INFO", f"Complete request parameters for turn {turn + 1}:")
+                log_processing_step("MODEL_REQUEST_PARAMS", "INFO", f"Model: {request_params['model']}")
+                log_processing_step("MODEL_REQUEST_PARAMS", "INFO", f"Response format: {request_params['response_format']}")
+                log_processing_step("MODEL_REQUEST_PARAMS", "INFO", f"Messages count: {len(request_params['messages'])}")
+                
+                # Log the complete request content
+                log_processing_step("MODEL_REQUEST_CONTENT", "INFO", f"Complete request messages for turn {turn + 1}:")
+                for i, msg in enumerate(messages):
+                    log_processing_step("MODEL_REQUEST_CONTENT", "INFO", f"Message {i + 1} - Role: {msg['role']}")
+                    # Truncate very long content for readability, but log the full content
+                    content = msg['content']
+                    if len(content) > 500:
+                        log_processing_step("MODEL_REQUEST_CONTENT", "INFO", f"Content (truncated): {content[:500]}...")
+                        log_processing_step("MODEL_REQUEST_CONTENT", "DETAIL", f"Full content: {content}")
+                    else:
+                        log_processing_step("MODEL_REQUEST_CONTENT", "INFO", f"Content: {content}")
 
-                response = client.chat.completions.create(
-                    model="o4-mini",
-                    messages=messages,
-                    response_format={"type": "json_object"}
-                )
+                response = client.chat.completions.create(**request_params)
                 
                 response_content = response.choices[0].message.content
+                
+                # Log the complete response content
+                log_processing_step("MODEL_RESPONSE_CONTENT", "INFO", f"Complete response for turn {turn + 1}:")
+                if len(response_content) > 500:
+                    log_processing_step("MODEL_RESPONSE_CONTENT", "INFO", f"Response (truncated): {response_content[:500]}...")
+                    log_processing_step("MODEL_RESPONSE_CONTENT", "DETAIL", f"Full response: {response_content}")
+                else:
+                    log_processing_step("MODEL_RESPONSE_CONTENT", "INFO", f"Response: {response_content}")
                 
                 # Stream the raw OpenAI response to the client
                 yield response_content + '\n\n'
