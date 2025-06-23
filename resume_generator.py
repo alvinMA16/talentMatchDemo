@@ -81,14 +81,38 @@ def resume_generate_chat_api():
             return
 
         messages = [{'role': 'system', 'content': system_prompt}]
+        
+        # Log initial history processing
+        log_processing_step("HISTORY_PROCESSING", "START", f"=== PROCESSING HISTORY: {len(history)} items received from frontend ===")
+        
         if history:
-            for item in history:
-                if 'role' in item and 'parts' in item and item['parts']:
+            for i, item in enumerate(history):
+                log_processing_step("HISTORY_PROCESSING", "INFO", f"History item {i + 1}:")
+                log_processing_step("HISTORY_PROCESSING", "DETAIL", f"  Raw item: {item}")
+                
+                # Handle different possible formats from frontend
+                if 'role' in item and 'content' in item:
+                    # Standard format
+                    messages.append({'role': item['role'], 'content': item['content']})
+                    log_processing_step("HISTORY_PROCESSING", "INFO", f"  ✓ Added standard format: {item['role']} message (length: {len(item['content'])})")
+                elif 'role' in item and 'parts' in item and item['parts']:
+                    # Parts format (current format)
                     content = item['parts'][0]
                     messages.append({'role': item['role'], 'content': content})
+                    log_processing_step("HISTORY_PROCESSING", "INFO", f"  ✓ Added parts format: {item['role']} message (length: {len(content)})")
+                else:
+                    log_processing_step("HISTORY_PROCESSING", "WARNING", f"  ✗ Unrecognized format: {item}")
+        else:
+            log_processing_step("HISTORY_PROCESSING", "INFO", "No history items received - this is the first interaction")
         
         # Add the current user message to the history for the agent
         messages.append({'role': 'user', 'content': user_message})
+        
+        log_processing_step("HISTORY_PROCESSING", "COMPLETE", f"=== HISTORY PROCESSING COMPLETE ===")
+        log_processing_step("HISTORY_PROCESSING", "COMPLETE", f"Final messages array: {len(messages)} total items")
+        log_processing_step("HISTORY_PROCESSING", "COMPLETE", f"  - 1 system prompt")
+        log_processing_step("HISTORY_PROCESSING", "COMPLETE", f"  - {len(history)} history items") 
+        log_processing_step("HISTORY_PROCESSING", "COMPLETE", f"  - 1 current user message")
         
         try:
             log_processing_step("RESUME_GENERATION_CHAT", "START", f"Starting chat session with {max_turns} max turns")
@@ -110,17 +134,37 @@ def resume_generate_chat_api():
                 log_processing_step("MODEL_REQUEST_PARAMS", "INFO", f"Response format: {request_params['response_format']}")
                 log_processing_step("MODEL_REQUEST_PARAMS", "INFO", f"Messages count: {len(request_params['messages'])}")
                 
-                # Log the complete request content
-                log_processing_step("MODEL_REQUEST_CONTENT", "INFO", f"Complete request messages for turn {turn + 1}:")
+                # Log the complete request content with better formatting
+                log_processing_step("MODEL_REQUEST_CONTENT", "INFO", f"=== COMPLETE REQUEST MESSAGES FOR TURN {turn + 1} ===")
+                log_processing_step("MODEL_REQUEST_CONTENT", "INFO", f"Total messages in context: {len(messages)}")
+                
+                # Group messages by type for better readability
+                system_count = sum(1 for msg in messages if msg['role'] == 'system')
+                user_count = sum(1 for msg in messages if msg['role'] == 'user')
+                assistant_count = sum(1 for msg in messages if msg['role'] == 'assistant')
+                
+                log_processing_step("MODEL_REQUEST_CONTENT", "INFO", f"Message breakdown: {system_count} system, {user_count} user, {assistant_count} assistant")
+                log_processing_step("MODEL_REQUEST_CONTENT", "INFO", "--- MESSAGE DETAILS ---")
+                
                 for i, msg in enumerate(messages):
-                    log_processing_step("MODEL_REQUEST_CONTENT", "INFO", f"Message {i + 1} - Role: {msg['role']}")
-                    # Truncate very long content for readability, but log the full content
+                    role = msg['role']
                     content = msg['content']
-                    if len(content) > 500:
-                        log_processing_step("MODEL_REQUEST_CONTENT", "INFO", f"Content (truncated): {content[:500]}...")
-                        log_processing_step("MODEL_REQUEST_CONTENT", "DETAIL", f"Full content: {content}")
+                    
+                    # Log message header
+                    log_processing_step("MODEL_REQUEST_CONTENT", "INFO", f"[{i + 1}] Role: {role.upper()}")
+                    
+                    # Handle content logging
+                    if len(content) > 300:
+                        log_processing_step("MODEL_REQUEST_CONTENT", "INFO", f"    Content (first 300 chars): {content[:300]}...")
+                        log_processing_step("MODEL_REQUEST_CONTENT", "DETAIL", f"    Full content: {content}")
                     else:
-                        log_processing_step("MODEL_REQUEST_CONTENT", "INFO", f"Content: {content}")
+                        log_processing_step("MODEL_REQUEST_CONTENT", "INFO", f"    Content: {content}")
+                    
+                    # Add separator for readability  
+                    if i < len(messages) - 1:
+                        log_processing_step("MODEL_REQUEST_CONTENT", "INFO", "    ---")
+                
+                log_processing_step("MODEL_REQUEST_CONTENT", "INFO", f"=== END REQUEST MESSAGES FOR TURN {turn + 1} ===")
 
                 response = client.chat.completions.create(**request_params)
                 
@@ -139,6 +183,7 @@ def resume_generate_chat_api():
 
                 # Add the AI's full action JSON to the history for the next turn
                 messages.append({'role': 'assistant', 'content': response_content})
+                log_processing_step("HISTORY_UPDATE", "INFO", f"Added AI response to history. Total messages: {len(messages)}")
                 
                 try:
                     response_json = json.loads(response_content)
@@ -171,6 +216,7 @@ def resume_generate_chat_api():
                                 # The role MUST be 'assistant' for the model to understand the response.
                                 tool_message = {"role": "assistant", "content": tool_result}
                                 messages.append(tool_message)
+                                log_processing_step("HISTORY_UPDATE", "INFO", f"Added tool result to history. Total messages: {len(messages)}")
                                 yield json.dumps(tool_message) + '\n\n'
                                 log_processing_step("TOOL_CALL", "COMPLETE", f"Tool result streamed for: {function_name}")
                     
