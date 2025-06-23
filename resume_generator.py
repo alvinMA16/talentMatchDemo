@@ -2,7 +2,7 @@ import os
 import json
 from flask import Blueprint, render_template, request, jsonify, Response
 from openai import OpenAI
-from helpers import get_prompt, get_db_connection
+from helpers import get_prompt, get_db_connection, log_model_request, log_model_response, log_processing_step
 
 # Create a Blueprint
 resume_generator_bp = Blueprint(
@@ -30,11 +30,11 @@ def find_candidate_by_id_or_name(candidate_id=None, name=None):
     params = ()
     
     if candidate_id:
-        print(f"--- [Tool Executing] Finding candidate by ID: {candidate_id} ---")
+        log_processing_step("DATABASE_QUERY", "START", f"Finding candidate by ID: {candidate_id}")
         query = 'SELECT * FROM resumes WHERE id = ?'
         params = (candidate_id,)
     elif name:
-        print(f"--- [Tool Executing] Finding candidate by Name: {name} ---")
+        log_processing_step("DATABASE_QUERY", "START", f"Finding candidate by Name: {name}")
         query = 'SELECT * FROM resumes WHERE name = ?'
         params = (name,)
 
@@ -43,11 +43,13 @@ def find_candidate_by_id_or_name(candidate_id=None, name=None):
         candidate = conn.execute(query, params).fetchone()
         conn.close()
         if candidate:
+            log_processing_step("DATABASE_QUERY", "COMPLETE", f"Found candidate: {candidate['name']} (ID: {candidate['id']})")
             return json.dumps(dict(candidate))
         else:
+            log_processing_step("DATABASE_QUERY", "COMPLETE", "Candidate not found")
             return json.dumps({"error": f"Candidate not found."})
     except Exception as e:
-        print(f"--- [Tool Error] {e} ---")
+        log_processing_step("DATABASE_QUERY", "ERROR", f"Database error: {str(e)}")
         return json.dumps({"error": str(e)})
 
 @resume_generator_bp.route('/resume/generate')
@@ -89,8 +91,13 @@ def resume_generate_chat_api():
         messages.append({'role': 'user', 'content': user_message})
         
         try:
+            log_processing_step("RESUME_GENERATION_CHAT", "START", f"Starting chat session with {max_turns} max turns")
+            
             for turn in range(max_turns):
-                print(f"--- Agent Turn {turn + 1} ---")
+                log_processing_step("AGENT_TURN", "START", f"Turn {turn + 1}/{max_turns}")
+
+                # Log model request
+                log_model_request("o4-mini", "RESUME_GENERATION_CHAT", f"Turn {turn + 1}: {len(messages)} messages in history")
 
                 response = client.chat.completions.create(
                     model="o4-mini",
@@ -111,18 +118,26 @@ def resume_generate_chat_api():
                     ai_action = response_json.get("action", {})
                     action_type = ai_action.get("type")
                     payload = ai_action.get("payload")
+                    
+                    # Log successful model response
+                    log_model_response("o4-mini", "RESUME_GENERATION_CHAT", success=True, 
+                                      output_summary=f"Action: {action_type}")
+                    
                 except (json.JSONDecodeError, AttributeError):
+                    log_model_response("o4-mini", "RESUME_GENERATION_CHAT", success=False, 
+                                      error_msg="Failed to parse JSON response")
                     # If parsing fails, we can't continue the loop logically.
                     break
 
                 if action_type in ["thought", "tool_call", "generate_resume"]:
-                    print(f"--- Action: Intermediate Step ({action_type}) ---")
+                    log_processing_step("AGENT_ACTION", "PROCESS", f"Intermediate step: {action_type}")
 
                     # Handle tool call specifically as it adds a new message to the history
                     if action_type == "tool_call":
                         if payload:
                             function_name = payload.get("function_name")
                             if function_name == "find_candidate_by_id_or_name":
+                                log_processing_step("TOOL_CALL", "START", f"Executing: {function_name}")
                                 tool_result = find_candidate_by_id_or_name(**payload.get("parameters", {}))
                                 
                                 # Add tool result and stream it.
@@ -130,17 +145,21 @@ def resume_generate_chat_api():
                                 tool_message = {"role": "assistant", "content": tool_result}
                                 messages.append(tool_message)
                                 yield json.dumps(tool_message) + '\n\n'
+                                log_processing_step("TOOL_CALL", "COMPLETE", f"Tool result streamed for: {function_name}")
                     
                     # For 'thought' and 'generate_resume', the assistant message is already in history.
                     # We just continue to the next turn.
                     continue
                 else:
                     # This covers chat_message, final_message, and any unknown types
-                    print(f"--- Action: Breaking action ({action_type}) ---")
+                    log_processing_step("AGENT_ACTION", "COMPLETE", f"Final action: {action_type}")
                     break
+            
+            log_processing_step("RESUME_GENERATION_CHAT", "COMPLETE", f"Chat session completed after {turn + 1} turns")
 
         except Exception as e:
-            print(f"Error during resume generation stream: {e}")
+            log_processing_step("RESUME_GENERATION_CHAT", "ERROR", f"Error during chat: {str(e)}")
+            log_model_response("o4-mini", "RESUME_GENERATION_CHAT", success=False, error_msg=str(e))
             error_message = {
                 "reasoning": "发生了一个内部错误。",
                 "action": {

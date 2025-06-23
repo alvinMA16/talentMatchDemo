@@ -12,8 +12,10 @@ import google.generativeai as genai
 import pandas as pd
 import io
 from werkzeug.utils import secure_filename
-from helpers import get_prompt, get_db_connection, check_and_migrate_db
+from helpers import get_prompt, get_db_connection, check_and_migrate_db, log_model_request, log_model_response, log_processing_step, log_batch_item, log_desensitization, log_queue, diagnose_json_error
 from resume_generator import resume_generator_bp
+import time
+import queue
 
 # --- Database Setup ---
 DATABASE = 'talent_match.db'
@@ -25,8 +27,10 @@ def get_db_connection():
 
 def get_desensitized_version(resume_data):
     """Calls GenAI to create a desensitized version of the resume."""
+    candidate_name = resume_data.get('name', 'Unknown')
+    
     if os.environ.get("GOOGLE_API_KEY") is None:
-        print("Warning: GOOGLE_API_KEY not found. Skipping desensitization.")
+        log_desensitization("RESUME", candidate_name, success=False, error_msg="GOOGLE_API_KEY not found")
         # Return the original data with PII cleared as a fallback
         fallback_data = resume_data.copy()
         fallback_data['name'] = "Candidate"
@@ -42,21 +46,81 @@ def get_desensitized_version(resume_data):
 
         # Convert python dict to a JSON string to send to the model
         resume_json_string = json.dumps(resume_data)
+        
+        # Log model request
+        log_model_request("gemini-1.5-flash", "RESUME_DESENSITIZATION", f"Resume: {candidate_name}")
 
         response = model.generate_content([prompt, resume_json_string])
         
         cleaned_text = response.text.strip().replace('```json', '').replace('```', '').strip()
-        desensitized_data = json.loads(cleaned_text)
+        
+        # 尝试解析JSON，如果失败则尝试修复
+        try:
+            desensitized_data = json.loads(cleaned_text)
+        except json.JSONDecodeError as json_error:
+            # 诊断JSON错误
+            diagnosis = diagnose_json_error(cleaned_text, str(json_error))
+            log_model_response("gemini-1.5-flash", "RESUME_DESENSITIZATION", success=False, 
+                              error_msg=f"JSON parse error: {str(json_error)}")
+            print(f"JSON诊断报告:\n{diagnosis}")
+            
+            # 尝试基本的JSON修复
+            try:
+                # 移除可能的多余内容和修复常见问题
+                fixed_text = cleaned_text
+                
+                # 移除可能的前后缀内容，只保留JSON部分
+                start_idx = fixed_text.find('{')
+                end_idx = fixed_text.rfind('}')
+                if start_idx != -1 and end_idx != -1:
+                    fixed_text = fixed_text[start_idx:end_idx+1]
+                
+                # 尝试解析修复后的JSON
+                desensitized_data = json.loads(fixed_text)
+                log_model_response("gemini-1.5-flash", "RESUME_DESENSITIZATION", success=True, 
+                                  output_summary=f"JSON repaired and parsed successfully")
+                
+            except json.JSONDecodeError:
+                # 如果修复仍然失败，创建基本的脱敏版本
+                log_model_response("gemini-1.5-flash", "RESUME_DESENSITIZATION", success=False, 
+                                  error_msg=f"JSON repair failed, using fallback desensitization")
+                
+                desensitized_data = resume_data.copy()
+                desensitized_data['name'] = "Candidate"
+                desensitized_data['email'] = "hidden@example.com"
+                desensitized_data['phone'] = "***-****-****"
+                
+                # 移除或脱敏其他敏感信息
+                if 'education' in desensitized_data:
+                    for edu in desensitized_data.get('education', []):
+                        if isinstance(edu, dict) and 'institution' in edu:
+                            edu['institution'] = "某大学"
+                
+                if 'experience' in desensitized_data:
+                    for exp in desensitized_data.get('experience', []):
+                        if isinstance(exp, dict) and 'company' in exp:
+                            exp['company'] = "某公司"
+        
+        # Log successful response
+        desensitized_name = desensitized_data.get('name', 'Candidate')
+        log_model_response("gemini-1.5-flash", "RESUME_DESENSITIZATION", success=True, 
+                          output_summary=f"Desensitized name: {desensitized_name}")
+        log_desensitization("RESUME", candidate_name, success=True)
+        
         return desensitized_data
     except Exception as e:
-        print(f"Error during desensitization: {e}")
+        log_model_response("gemini-1.5-flash", "RESUME_DESENSITIZATION", success=False, error_msg=str(e))
+        log_desensitization("RESUME", candidate_name, success=False, error_msg=str(e))
         # In case of failure, return the original data to avoid breaking the flow
         return resume_data
 
 def get_desensitized_jd_version(jd_data):
     """Calls GenAI to create a desensitized version of the job description."""
+    jd_title = jd_data.get('title', 'Unknown Job')
+    company = jd_data.get('company', 'Unknown Company')
+    
     if os.environ.get("GOOGLE_API_KEY") is None:
-        print("Warning: GOOGLE_API_KEY not found. Skipping JD desensitization.")
+        log_desensitization("JD", f"{jd_title} @ {company}", success=False, error_msg="GOOGLE_API_KEY not found")
         # Return the original data with sensitive info cleared as a fallback
         fallback_data = jd_data.copy()
         fallback_data['company'] = "某公司"
@@ -71,13 +135,64 @@ def get_desensitized_jd_version(jd_data):
         # Convert python dict to a JSON string to send to the model
         jd_json_string = json.dumps(jd_data)
 
+        # Log model request
+        log_model_request("gemini-1.5-flash", "JD_DESENSITIZATION", f"JD: {jd_title} @ {company}")
+
         response = model.generate_content([prompt, jd_json_string])
         
         cleaned_text = response.text.strip().replace('```json', '').replace('```', '').strip()
-        desensitized_data = json.loads(cleaned_text)
+        
+        # 尝试解析JSON，如果失败则尝试修复
+        try:
+            desensitized_data = json.loads(cleaned_text)
+        except json.JSONDecodeError as json_error:
+            # 诊断JSON错误
+            diagnosis = diagnose_json_error(cleaned_text, str(json_error))
+            log_model_response("gemini-1.5-flash", "JD_DESENSITIZATION", success=False, 
+                              error_msg=f"JSON parse error: {str(json_error)}")
+            print(f"JSON诊断报告:\n{diagnosis}")
+            
+            # 尝试基本的JSON修复
+            try:
+                # 移除可能的多余内容和修复常见问题
+                fixed_text = cleaned_text
+                
+                # 移除可能的前后缀内容，只保留JSON部分
+                start_idx = fixed_text.find('{')
+                end_idx = fixed_text.rfind('}')
+                if start_idx != -1 and end_idx != -1:
+                    fixed_text = fixed_text[start_idx:end_idx+1]
+                
+                # 尝试解析修复后的JSON
+                desensitized_data = json.loads(fixed_text)
+                log_model_response("gemini-1.5-flash", "JD_DESENSITIZATION", success=True, 
+                                  output_summary=f"JSON repaired and parsed successfully")
+                
+            except json.JSONDecodeError:
+                # 如果修复仍然失败，创建基本的脱敏版本
+                log_model_response("gemini-1.5-flash", "JD_DESENSITIZATION", success=False, 
+                                  error_msg=f"JSON repair failed, using fallback desensitization")
+                
+                desensitized_data = jd_data.copy()
+                desensitized_data['company'] = "某公司"
+                if 'location' in desensitized_data:
+                    desensitized_data['location'] = "某城市"
+                if 'salary' in desensitized_data:
+                    # 保留薪资范围但移除具体数字
+                    salary_text = str(desensitized_data.get('salary', ''))
+                    if any(x in salary_text.lower() for x in ['万', 'k', '千']):
+                        desensitized_data['salary'] = "面议"
+        
+        # Log successful response
+        desensitized_company = desensitized_data.get('company', '某公司')
+        log_model_response("gemini-1.5-flash", "JD_DESENSITIZATION", success=True, 
+                          output_summary=f"Desensitized company: {desensitized_company}")
+        log_desensitization("JD", f"{jd_title} @ {company}", success=True)
+        
         return desensitized_data
     except Exception as e:
-        print(f"Error during JD desensitization: {e}")
+        log_model_response("gemini-1.5-flash", "JD_DESENSITIZATION", success=False, error_msg=str(e))
+        log_desensitization("JD", f"{jd_title} @ {company}", success=False, error_msg=str(e))
         # In case of failure, return the original data to avoid breaking the flow
         return jd_data
 
@@ -99,9 +214,9 @@ def init_db():
 # 配置GenAI
 try:
     genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
-    print("Google API Key configured successfully.")
+    log_processing_step("SYSTEM_INIT", "COMPLETE", "Google API Key configured successfully")
 except KeyError:
-    print("Warning: GOOGLE_API_KEY not found in environment variables. Upload feature will not work.")
+    log_processing_step("SYSTEM_INIT", "WARNING", "GOOGLE_API_KEY not found - some features will be limited")
     genai.configure(api_key="mock-api-key") # Avoid crashing if key is not set
 
 # 创建Flask应用实例
@@ -228,9 +343,12 @@ def batch_upload_resume():
     if not file or not file.filename.endswith('.pdf'):
         return jsonify({'status': 'error', 'message': 'Invalid file type, only PDF is supported'}), 400
 
+    log_processing_step("RESUME_BATCH_UPLOAD", "START", f"Processing file: {file.filename}")
+    
     try:
         # 1. AI Parsing
         if os.environ.get("GOOGLE_API_KEY") is None:
+            log_processing_step("RESUME_BATCH_UPLOAD", "ERROR", "Google API Key not configured")
             return jsonify({'status': 'error', 'message': 'Google API Key not configured'}), 500
 
         pdf_bytes = file.read()
@@ -238,7 +356,11 @@ def batch_upload_resume():
         
         prompt = get_prompt('extract_resume_info.txt')
         if not prompt:
+            log_processing_step("RESUME_BATCH_UPLOAD", "ERROR", "Could not load resume extraction prompt")
             return jsonify({'status': 'error', 'message': 'Could not load resume extraction prompt.'}), 500
+
+        # Log model request
+        log_model_request("gemini-1.5-flash", "RESUME_EXTRACTION", f"PDF file: {file.filename}")
 
         response = model.generate_content([
             {"mime_type": "application/pdf", "data": pdf_bytes},
@@ -247,8 +369,14 @@ def batch_upload_resume():
         
         cleaned_text = response.text.strip().replace('```json', '').replace('```', '').strip()
         data = json.loads(cleaned_text)
+        
+        # Log successful extraction
+        candidate_name = data.get('name', 'Unknown')
+        log_model_response("gemini-1.5-flash", "RESUME_EXTRACTION", success=True, 
+                          output_summary=f"Extracted: {candidate_name}")
 
         # 2. Desensitize the extracted data
+        log_processing_step("RESUME_DESENSITIZATION", "START", f"Desensitizing data for: {candidate_name}")
         desensitized_data = get_desensitized_version(data)
 
         # 3. Duplicate Check
@@ -257,17 +385,21 @@ def batch_upload_resume():
         phone = data.get('phone')
         
         if not name:
-             return jsonify({'status': 'error', 'message': 'Failed to extract candidate name.'})
+            log_processing_step("RESUME_BATCH_UPLOAD", "ERROR", "Failed to extract candidate name")
+            return jsonify({'status': 'error', 'message': 'Failed to extract candidate name.'})
 
+        log_processing_step("DUPLICATE_CHECK", "START", f"Checking duplicates for: {name}")
         conn = get_db_connection()
         query = "SELECT id FROM resumes WHERE name = ? OR (email != '' AND email = ?) OR (phone != '' AND phone = ?)"
         existing = conn.execute(query, (name, email, phone)).fetchone()
 
         if existing:
             conn.close()
+            log_processing_step("DUPLICATE_CHECK", "COMPLETE", f"Duplicate found (ID: {existing['id']})")
             return jsonify({'status': 'duplicate', 'message': f"Candidate already exists (ID: {existing['id']})"})
 
         # 4. Insert into DB
+        log_processing_step("DATABASE_INSERT", "START", f"Inserting resume for: {name}")
         conn.execute(
             """
             INSERT INTO resumes (name, email, phone, skills, summary, experience_json, education_json, publications_json, projects_json, desensitized_json)
@@ -287,10 +419,14 @@ def batch_upload_resume():
         conn.commit()
         conn.close()
         
+        log_processing_step("DATABASE_INSERT", "COMPLETE", f"Successfully inserted: {name}")
+        log_processing_step("RESUME_BATCH_UPLOAD", "COMPLETE", f"Successfully processed: {file.filename}")
+        
         return jsonify({'status': 'success', 'message': 'Resume added successfully'})
 
     except Exception as e:
-        print(f"Batch upload error for {file.filename}: {e}")
+        log_processing_step("RESUME_BATCH_UPLOAD", "ERROR", f"Error processing {file.filename}: {str(e)}")
+        log_model_response("gemini-1.5-flash", "RESUME_EXTRACTION", success=False, error_msg=str(e))
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 # API: 上传并解析简历
@@ -304,16 +440,23 @@ def upload_resume():
         return jsonify({'status': 'error', 'message': '没有选择文件'}), 400
 
     if file and file.filename.endswith('.pdf'):
+        log_processing_step("RESUME_UPLOAD", "START", f"Processing file: {file.filename}")
+        
         try:
             # Check if API key is mocked
             if os.environ.get("GOOGLE_API_KEY") is None:
+                log_processing_step("RESUME_UPLOAD", "ERROR", "Google API Key未设置")
                 return jsonify({'status': 'error', 'message': 'Google API Key未设置，无法解析简历。'}), 500
 
             pdf_bytes = file.read()
             
             prompt = get_prompt('extract_resume_info.txt')
             if not prompt:
-                 return jsonify({'status': 'error', 'message': 'Could not load resume extraction prompt.'}), 500
+                log_processing_step("RESUME_UPLOAD", "ERROR", "Could not load resume extraction prompt")
+                return jsonify({'status': 'error', 'message': 'Could not load resume extraction prompt.'}), 500
+            
+            # Log model request
+            log_model_request("gemini-1.5-flash", "RESUME_EXTRACTION", f"PDF file: {file.filename}")
             
             model = genai.GenerativeModel('gemini-1.5-flash')
             response = model.generate_content([
@@ -328,8 +471,11 @@ def upload_resume():
             cleaned_text = response.text.strip().replace('```json', '').replace('```', '').strip()
             extracted_data = json.loads(cleaned_text)
             
-            # 打印log
-            print(f"=================Extracted data===============:\n {extracted_data}")
+            # Log successful extraction
+            candidate_name = extracted_data.get('name', 'Unknown')
+            log_model_response("gemini-1.5-flash", "RESUME_EXTRACTION", success=True, 
+                              output_summary=f"Extracted: {candidate_name}")
+            log_processing_step("RESUME_UPLOAD", "COMPLETE", f"Successfully parsed: {file.filename}")
 
             return jsonify({
                 'status': 'success',
@@ -338,7 +484,8 @@ def upload_resume():
             })           
 
         except Exception as e:
-            print(f"Error parsing resume: {e}")
+            log_model_response("gemini-1.5-flash", "RESUME_EXTRACTION", success=False, error_msg=str(e))
+            log_processing_step("RESUME_UPLOAD", "ERROR", f"Error parsing {file.filename}: {str(e)}")
             return jsonify({'status': 'error', 'message': f'简历解析失败: {e}'}), 500
 
     return jsonify({'status': 'error', 'message': '只支持PDF文件格式'}), 400
@@ -354,23 +501,31 @@ def add_resume():
     email = data.get('email')
     phone = data.get('phone')
 
+    log_processing_step("ADD_RESUME", "START", f"Adding resume for: {name}")
+
     conn = get_db_connection()
 
     # Check for duplicates
+    log_processing_step("DUPLICATE_CHECK", "START", f"Checking duplicates for: {name}")
     query = "SELECT * FROM resumes WHERE name = ? OR (email != '' AND email = ?) OR (phone != '' AND phone = ?)"
     existing = conn.execute(query, (name, email, phone)).fetchone()
     
     if existing:
         conn.close()
+        log_processing_step("DUPLICATE_CHECK", "COMPLETE", f"Duplicate found (ID: {existing['id']})")
         return jsonify({
             'status': 'duplicate',
             'message': f"A candidate with similar info already exists (ID: {existing['id']}, Name: {existing['name']}). Please review before adding another."
         })
 
+    log_processing_step("DUPLICATE_CHECK", "COMPLETE", "No duplicates found")
+
     # Get desensitized version
+    log_processing_step("RESUME_DESENSITIZATION", "START", f"Desensitizing data for: {name}")
     desensitized_data = get_desensitized_version(data)
 
     # Insert new resume
+    log_processing_step("DATABASE_INSERT", "START", f"Inserting resume for: {name}")
     conn.execute(
         """
         INSERT INTO resumes (name, email, phone, skills, summary, experience_json, education_json, publications_json, projects_json, desensitized_json)
@@ -393,6 +548,9 @@ def add_resume():
     new_resume_id = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
     new_resume = conn.execute('SELECT * FROM resumes WHERE id = ?', (new_resume_id,)).fetchone()
     conn.close()
+
+    log_processing_step("DATABASE_INSERT", "COMPLETE", f"Successfully inserted: {name} (ID: {new_resume_id})")
+    log_processing_step("ADD_RESUME", "COMPLETE", f"Successfully added resume for: {name}")
 
     return jsonify({
         'status': 'success',
@@ -426,6 +584,7 @@ def batch_upload_jd():
 
     def generate_progress():
         # 1. Read file content based on type
+        log_processing_step("JD_BATCH_UPLOAD", "START", f"Processing file: {filename}")
         jobs_to_process = []
         try:
             if filename.endswith(('.xlsx', '.xls')):
@@ -433,29 +592,36 @@ def batch_upload_jd():
                 df = pd.read_excel(io.BytesIO(file_content))
                 df['combined_text'] = df.apply(lambda row: ' '.join(row.astype(str)), axis=1)
                 jobs_to_process = [{'source': f"Row {i+2}", 'content': row['combined_text']} for i, row in df.iterrows()]
+                log_processing_step("FILE_PARSING", "COMPLETE", f"Parsed Excel file with {len(jobs_to_process)} jobs")
             elif filename.endswith('.json'):
                 # Decode bytes to string for json.loads
                 raw_data = json.loads(file_content.decode('utf-8'))
                 if isinstance(raw_data, list):
                     jobs_to_process = [{'source': f"Object {i+1}", 'content': json.dumps(obj)} for i, obj in enumerate(raw_data)]
+                    log_processing_step("FILE_PARSING", "COMPLETE", f"Parsed JSON file with {len(jobs_to_process)} jobs")
                 else:
+                    log_processing_step("FILE_PARSING", "ERROR", "JSON file must contain a list of job objects")
                     yield f"data: {json.dumps({'status': 'error', 'message': 'JSON file must contain a list of job objects.'})}\n\n"
                     return
             else:
+                log_processing_step("FILE_PARSING", "ERROR", f"Unsupported file type: {filename}")
                 yield f"data: {json.dumps({'status': 'error', 'message': 'Unsupported file type. Please use JSON, XLSX, or XLS.'})}\n\n"
                 return
         except Exception as e:
+            log_processing_step("FILE_PARSING", "ERROR", f"Failed to read or parse file: {str(e)}")
             yield f"data: {json.dumps({'status': 'error', 'message': f'Failed to read or parse file: {e}'})}\n\n"
             return
 
         # 2. Process each job with GenAI
         if os.environ.get("GOOGLE_API_KEY") is None:
+            log_processing_step("JD_BATCH_UPLOAD", "ERROR", "Google API Key not configured")
             yield f"data: {json.dumps({'status': 'error', 'message': 'Google API Key not configured'})}\n\n"
             return
         
         model = genai.GenerativeModel('gemini-1.5-flash')
         prompt = get_prompt('extract_jd_info.txt')
         if not prompt:
+            log_processing_step("JD_BATCH_UPLOAD", "ERROR", "Could not load JD extraction prompt")
             yield f"data: {json.dumps({'status': 'error', 'message': 'Could not load JD extraction prompt.'})}\n\n"
             return
 
@@ -463,9 +629,14 @@ def batch_upload_jd():
         success_count = 0
         failures = []
         conn = get_db_connection()
+        
+        log_processing_step("JD_BATCH_PROCESSING", "START", f"Processing {total_jobs} jobs")
 
         for i, job in enumerate(jobs_to_process):
             try:
+                # Log model request for each job
+                log_model_request("gemini-1.5-flash", "JD_EXTRACTION", f"Batch item {i+1}/{total_jobs}: {job['source']}")
+                
                 response = model.generate_content([job['content'], prompt])
                 cleaned_text = response.text.strip().replace('```json', '').replace('```', '').strip()
                 data = json.loads(cleaned_text)
@@ -474,14 +645,20 @@ def batch_upload_jd():
                 if not title:
                     raise ValueError('Failed to extract job title.')
                 
+                # Log successful extraction
+                company = data.get('company', 'Unknown')
+                log_model_response("gemini-1.5-flash", "JD_EXTRACTION", success=True, 
+                                  output_summary=f"Extracted: {title} @ {company}")
+                
                 # Get desensitized version
                 desensitized_data = get_desensitized_jd_version(data)
                 
-                company = data.get('company', '')
+                # Check for duplicates
                 existing = conn.execute('SELECT id FROM job_descriptions WHERE title = ? AND company = ?', (title, company)).fetchone()
                 if existing:
                     raise ValueError(f'Duplicate job already exists (ID: {existing["id"]})')
 
+                # Insert into database
                 conn.execute(
                     """
                     INSERT INTO job_descriptions (title, company, location, salary, requirements, description, benefits, desensitized_json)
@@ -491,13 +668,25 @@ def batch_upload_jd():
                 )
                 conn.commit()
                 success_count += 1
+                
+                # Log successful batch item
+                log_batch_item("JD_BATCH_UPLOAD", i, total_jobs, f"{title} @ {company}", success=True, 
+                              details="Successfully inserted into database")
+                
                 yield f"data: {json.dumps({'type': 'progress', 'processed': i + 1, 'total': total_jobs, 'source': job['source']})}\n\n"
 
             except Exception as e:
+                # Log failed extraction
+                log_model_response("gemini-1.5-flash", "JD_EXTRACTION", success=False, error_msg=str(e))
+                log_batch_item("JD_BATCH_UPLOAD", i, total_jobs, job['source'], success=False, 
+                              details=str(e))
+                
                 failures.append({'source': job['source'], 'reason': str(e)})
                 yield f"data: {json.dumps({'type': 'progress', 'processed': i + 1, 'total': total_jobs, 'source': job['source'], 'error': str(e)})}\n\n"
         
         conn.close()
+        
+        log_processing_step("JD_BATCH_PROCESSING", "COMPLETE", f"Processed {total_jobs} jobs: {success_count} successful, {len(failures)} failed")
 
         yield f"data: {json.dumps({'type': 'complete', 'success_count': success_count, 'failures': failures})}\n\n"
 
@@ -513,18 +702,26 @@ def add_jd():
     title = data['title']
     company = data.get('company', '')
 
+    log_processing_step("ADD_JD", "START", f"Adding JD: {title} @ {company}")
+
     conn = get_db_connection()
 
     # Check for duplicates
+    log_processing_step("DUPLICATE_CHECK", "START", f"Checking duplicates for: {title} @ {company}")
     existing = conn.execute('SELECT id FROM job_descriptions WHERE title = ? AND company = ?', (title, company)).fetchone()
     if existing:
         conn.close()
+        log_processing_step("DUPLICATE_CHECK", "COMPLETE", f"Duplicate found (ID: {existing['id']})")
         return jsonify({'status': 'duplicate', 'message': f'该职位的记录已存在 (ID: {existing["id"]})'})
 
+    log_processing_step("DUPLICATE_CHECK", "COMPLETE", "No duplicates found")
+
     # Get desensitized version
+    log_processing_step("JD_DESENSITIZATION", "START", f"Desensitizing data for: {title} @ {company}")
     desensitized_data = get_desensitized_jd_version(data)
 
     # Insert new JD
+    log_processing_step("DATABASE_INSERT", "START", f"Inserting JD: {title} @ {company}")
     cursor = conn.execute(
         """
         INSERT INTO job_descriptions (title, company, location, salary, requirements, description, benefits, desensitized_json)
@@ -545,6 +742,9 @@ def add_jd():
     new_jd_id = cursor.lastrowid
     new_jd = conn.execute('SELECT * FROM job_descriptions WHERE id = ?', (new_jd_id,)).fetchone()
     conn.close()
+
+    log_processing_step("DATABASE_INSERT", "COMPLETE", f"Successfully inserted: {title} @ {company} (ID: {new_jd_id})")
+    log_processing_step("ADD_JD", "COMPLETE", f"Successfully added JD: {title} @ {company}")
 
     return jsonify({
         'status': 'success',
@@ -571,13 +771,22 @@ def ai_facilitate():
     if not resume_id or not jd_id:
         return jsonify({'status': 'error', 'message': '请选择简历和职位'}), 400
     
+    log_processing_step("AI_FACILITATE", "START", f"Starting facilitation for Resume ID: {resume_id}, JD ID: {jd_id}")
+    
     conn = get_db_connection()
     resume = conn.execute('SELECT * FROM resumes WHERE id = ?', (resume_id,)).fetchone()
     jd = conn.execute('SELECT * FROM job_descriptions WHERE id = ?', (jd_id,)).fetchone()
     
     if not resume or not jd:
         conn.close()
+        log_processing_step("AI_FACILITATE", "ERROR", "Resume or JD not found in database")
         return jsonify({'status': 'error', 'message': '找不到对应的简历或职位'}), 404
+    
+    candidate_name = resume['name']
+    jd_title = jd['title']
+    company = jd['company']
+    
+    log_processing_step("AI_FACILITATE", "PROGRESS", f"Matching {candidate_name} with {jd_title} @ {company}")
     
     # 简单的撮合分数计算（实际项目中会使用AI模型）
     import random
@@ -587,7 +796,10 @@ def ai_facilitate():
     improvements = ['某些技能需要加强', '相关项目经验可以更丰富']
     recommendation = '推荐' if facilitation_score >= 80 else '一般推荐' if facilitation_score >= 70 else '不推荐'
 
+    log_processing_step("FACILITATION_CALCULATION", "COMPLETE", f"Score: {facilitation_score}, Recommendation: {recommendation}")
+
     # Store result in DB
+    log_processing_step("DATABASE_INSERT", "START", f"Storing facilitation result for {candidate_name} <-> {jd_title}")
     cursor = conn.execute(
         """
         INSERT INTO facilitation_results (resume_id, jd_id, facilitation_score, strengths, improvements, recommendation)
@@ -602,6 +814,9 @@ def ai_facilitate():
     new_facilitation_result = conn.execute('SELECT * FROM facilitation_results WHERE id = ?', (new_id,)).fetchone()
 
     conn.close()
+    
+    log_processing_step("DATABASE_INSERT", "COMPLETE", f"Stored facilitation result (ID: {new_id})")
+    log_processing_step("AI_FACILITATE", "COMPLETE", f"Facilitation completed for {candidate_name} <-> {jd_title}")
     
     # Prepare data for JSON response
     result_to_return = {
@@ -692,6 +907,27 @@ def clear_database():
         print(f"An unexpected error occurred: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
+# API: 日志流 (Server-Sent Events)
+@app.route('/api/logs/stream')
+def log_stream():
+    """通过SSE向前端推送实时日志"""
+    def generate_logs():
+        # 发送初始化消息
+        yield f"data: {json.dumps({'type': 'init', 'message': 'Log stream connected'})}\n\n"
+        
+        # 持续监听日志队列
+        while True:
+            try:
+                # 等待新的日志消息，超时时间30秒
+                log_data = log_queue.get(timeout=30)
+                yield f"data: {json.dumps({'type': 'log', **log_data})}\n\n"
+            except:
+                # 超时或其他异常，发送心跳消息
+                yield f"data: {json.dumps({'type': 'heartbeat', 'timestamp': time.time()})}\n\n"
+    
+    return Response(generate_logs(), mimetype='text/event-stream', 
+                   headers={'Cache-Control': 'no-cache'})
+
 # 错误处理
 @app.errorhandler(404)
 def not_found(error):
@@ -699,4 +935,5 @@ def not_found(error):
 
 if __name__ == '__main__':
     # 开发环境运行配置
+    log_processing_step("SYSTEM_START", "START", "Starting TalentMatch application on port 8000")
     app.run(debug=True, host='0.0.0.0', port=8000) 
