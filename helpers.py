@@ -143,3 +143,72 @@ def get_prompt(filename):
             return f.read()
     except FileNotFoundError:
         return None 
+
+def get_resume_and_jd_info(resume_id, jd_id):
+    """
+    从数据库中获取简历和JD的完整信息
+    
+    Args:
+        resume_id (int): 简历ID
+        jd_id (int): 职位描述ID
+    
+    Returns:
+        tuple: (resume_info, jd_info) 包含完整信息的字典，如果找不到返回 (None, None)
+    """
+    log_processing_step("GET_RESUME_JD_INFO", "START", f"Fetching Resume ID: {resume_id}, JD ID: {jd_id}")
+    
+    conn = get_db_connection()
+    
+    try:
+        # 获取简历信息
+        resume = conn.execute('SELECT * FROM resumes WHERE id = ?', (resume_id,)).fetchone()
+        if not resume:
+            log_processing_step("GET_RESUME_JD_INFO", "ERROR", f"Resume ID {resume_id} not found")
+            return None, None
+        
+        # 获取JD信息
+        jd = conn.execute('SELECT * FROM job_descriptions WHERE id = ?', (jd_id,)).fetchone()
+        if not jd:
+            log_processing_step("GET_RESUME_JD_INFO", "ERROR", f"JD ID {jd_id} not found")
+            return None, None
+        
+        # 构建简历信息字典
+        resume_info = {
+            'id': resume['id'],
+            'name': resume['name'],
+            'email': resume['email'],
+            'phone': resume['phone'],
+            'skills': resume['skills'],
+            'summary': resume['summary'],
+            'experience': json.loads(resume['experience_json']) if resume['experience_json'] else [],
+            'education': json.loads(resume['education_json']) if resume['education_json'] else [],
+            'publications': json.loads(resume['publications_json']) if resume['publications_json'] else [],
+            'projects': json.loads(resume['projects_json']) if resume['projects_json'] else [],
+            'desensitized_data': json.loads(resume['desensitized_json']) if resume['desensitized_json'] else None,
+            'created_at': resume['created_at']
+        }
+        
+        # 构建JD信息字典
+        jd_info = {
+            'id': jd['id'],
+            'title': jd['title'],
+            'company': jd['company'],
+            'location': jd['location'],
+            'salary': jd['salary'],
+            'requirements': jd['requirements'],
+            'description': jd['description'],
+            'benefits': jd['benefits'],
+            'desensitized_data': json.loads(jd['desensitized_json']) if jd['desensitized_json'] else None,
+            'created_at': jd['created_at']
+        }
+        
+        log_processing_step("GET_RESUME_JD_INFO", "COMPLETE", 
+                          f"Retrieved {resume_info['name']} -> {jd_info['title']} @ {jd_info['company']}")
+        
+        return resume_info, jd_info
+        
+    except Exception as e:
+        log_processing_step("GET_RESUME_JD_INFO", "ERROR", f"Database error: {str(e)}")
+        return None, None
+    finally:
+        conn.close() 

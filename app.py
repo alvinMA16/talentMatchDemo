@@ -12,10 +12,13 @@ import google.generativeai as genai
 import pandas as pd
 import io
 from werkzeug.utils import secure_filename
-from helpers import get_prompt, get_db_connection, check_and_migrate_db, log_model_request, log_model_response, log_processing_step, log_batch_item, log_desensitization, log_queue, diagnose_json_error
+from helpers import get_prompt, get_db_connection, check_and_migrate_db, log_model_request, log_model_response, log_processing_step, log_batch_item, log_desensitization, log_queue, diagnose_json_error, get_resume_and_jd_info
 from resume_generator import resume_generator_bp
 import time
 import queue
+import os
+import datetime
+from openai import OpenAI
 
 # --- Database Setup ---
 DATABASE = 'talent_match.db'
@@ -24,6 +27,13 @@ def get_db_connection():
     conn = sqlite3.connect(DATABASE)
     conn.row_factory = sqlite3.Row
     return conn
+
+# --- OpenAI Setup ---
+# Initialize OpenAI client for profile generation
+openai_client = OpenAI(
+    api_key=os.environ.get("OPENAI_API_KEY"),
+    base_url = "http://47.93.181.123:4000",
+)
 
 def get_desensitized_version(resume_data):
     """Calls GenAI to create a desensitized version of the resume."""
@@ -202,6 +212,132 @@ def get_prompt(filename):
         with open(f'prompts/{filename}', 'r', encoding='utf-8') as f:
             return f.read()
     except FileNotFoundError:
+        return None
+
+def generate_candidate_profile(resume_info, jd_info):
+    """
+    使用OpenAI o4-mini模型生成候选人求职画像
+    
+    Args:
+        resume_info (dict): 候选人简历信息
+        jd_info (dict): 职位描述信息
+    
+    Returns:
+        dict: 生成的候选人画像，如果失败返回None
+    """
+    log_processing_step("CANDIDATE_PROFILE_GENERATION", "START", 
+                       f"Generating profile for {resume_info['name']} -> {jd_info['title']}")
+    
+    try:
+        prompt = get_prompt('generate_candidate_profile.txt')
+        if not prompt:
+            log_processing_step("CANDIDATE_PROFILE_GENERATION", "ERROR", "Could not load candidate profile prompt")
+            return None
+        
+        # 构建输入数据 - 使用脱敏版本的简历和JD信息
+        desensitized_resume = resume_info.get('desensitized_data')
+        if not desensitized_resume:
+            log_processing_step("CANDIDATE_PROFILE_GENERATION", "ERROR", "No desensitized data available for resume")
+            return None
+            
+        desensitized_jd = jd_info.get('desensitized_data')
+        if not desensitized_jd:
+            log_processing_step("CANDIDATE_PROFILE_GENERATION", "ERROR", "No desensitized data available for JD")
+            return None
+            
+        input_data = {
+            "候选人简历": desensitized_resume,
+            "目标职位": desensitized_jd
+        }
+        
+        messages = [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": f"请基于以下信息生成候选人求职画像：\n\n{json.dumps(input_data, ensure_ascii=False, indent=2)}"}
+        ]
+        
+        log_model_request("o4-mini", "CANDIDATE_PROFILE_GENERATION", 
+                         f"Candidate: {resume_info['name']}, Position: {jd_info['title']}")
+        
+        response = openai_client.chat.completions.create(
+            model="o4-mini",
+            messages=messages,
+            response_format={"type": "json_object"}
+        )
+        
+        response_content = response.choices[0].message.content
+        candidate_profile = json.loads(response_content)
+        
+        log_model_response("o4-mini", "CANDIDATE_PROFILE_GENERATION", success=True, 
+                          output_summary=f"Generated profile with {len(candidate_profile.get('job_preferences', []))} preferences")
+        log_processing_step("CANDIDATE_PROFILE_GENERATION", "COMPLETE", 
+                           f"Profile generated for {resume_info['name']}")
+        
+        return candidate_profile
+        
+    except Exception as e:
+        log_model_response("o4-mini", "CANDIDATE_PROFILE_GENERATION", success=False, error_msg=str(e))
+        log_processing_step("CANDIDATE_PROFILE_GENERATION", "ERROR", f"Error generating profile: {str(e)}")
+        return None
+
+def generate_company_profile(jd_info):
+    """
+    使用OpenAI o4-mini模型生成企业招聘画像
+    
+    Args:
+        jd_info (dict): 职位描述信息
+    
+    Returns:
+        dict: 生成的企业招聘画像，如果失败返回None
+    """
+    log_processing_step("COMPANY_PROFILE_GENERATION", "START", 
+                       f"Generating company profile for {jd_info['title']} @ {jd_info['company']}")
+    
+    try:
+        prompt = get_prompt('generate_company_profile.txt')
+        if not prompt:
+            log_processing_step("COMPANY_PROFILE_GENERATION", "ERROR", "Could not load company profile prompt")
+            return None
+        
+        # 构建输入数据
+        input_data = {
+            "职位信息": {
+                "职位名称": jd_info['title'],
+                "公司": jd_info['company'],
+                "地点": jd_info['location'],
+                "薪资": jd_info['salary'],
+                "职位要求": jd_info['requirements'],
+                "职位描述": jd_info['description'],
+                "福利待遇": jd_info['benefits']
+            }
+        }
+        
+        messages = [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": f"请基于以下职位信息生成企业招聘画像：\n\n{json.dumps(input_data, ensure_ascii=False, indent=2)}"}
+        ]
+        
+        log_model_request("o4-mini", "COMPANY_PROFILE_GENERATION", 
+                         f"Position: {jd_info['title']} @ {jd_info['company']}")
+        
+        response = openai_client.chat.completions.create(
+            model="o4-mini",
+            messages=messages,
+            response_format={"type": "json_object"}
+        )
+        
+        response_content = response.choices[0].message.content
+        company_profile = json.loads(response_content)
+        
+        log_model_response("o4-mini", "COMPANY_PROFILE_GENERATION", success=True, 
+                          output_summary=f"Generated company profile with {len(company_profile.get('valued_traits', []))} valued traits")
+        log_processing_step("COMPANY_PROFILE_GENERATION", "COMPLETE", 
+                           f"Company profile generated for {jd_info['company']}")
+        
+        return company_profile
+        
+    except Exception as e:
+        log_model_response("o4-mini", "COMPANY_PROFILE_GENERATION", success=False, error_msg=str(e))
+        log_processing_step("COMPANY_PROFILE_GENERATION", "ERROR", f"Error generating company profile: {str(e)}")
         return None
 
 def init_db():
@@ -761,9 +897,9 @@ def delete_jd(jd_id):
     conn.close()
     return jsonify({'status': 'success', 'message': '职位描述删除成功'})
 
-# API: AI人岗撮合
-@app.route('/api/facilitate', methods=['POST'])
-def ai_facilitate():
+# API: AI画像生成
+@app.route('/api/generate_profiles', methods=['POST'])
+def generate_profiles():
     data = request.get_json()
     resume_id = data.get('resume_id')
     jd_id = data.get('jd_id')
@@ -771,72 +907,53 @@ def ai_facilitate():
     if not resume_id or not jd_id:
         return jsonify({'status': 'error', 'message': '请选择简历和职位'}), 400
     
-    log_processing_step("AI_FACILITATE", "START", f"Starting facilitation for Resume ID: {resume_id}, JD ID: {jd_id}")
+    log_processing_step("PROFILE_GENERATION", "START", f"Starting profile generation for Resume ID: {resume_id}, JD ID: {jd_id}")
     
-    conn = get_db_connection()
-    resume = conn.execute('SELECT * FROM resumes WHERE id = ?', (resume_id,)).fetchone()
-    jd = conn.execute('SELECT * FROM job_descriptions WHERE id = ?', (jd_id,)).fetchone()
+    # 1. 获取简历和JD的完整信息
+    resume_info, jd_info = get_resume_and_jd_info(resume_id, jd_id)
     
-    if not resume or not jd:
-        conn.close()
-        log_processing_step("AI_FACILITATE", "ERROR", "Resume or JD not found in database")
+    if not resume_info or not jd_info:
+        log_processing_step("PROFILE_GENERATION", "ERROR", "Resume or JD not found in database")
         return jsonify({'status': 'error', 'message': '找不到对应的简历或职位'}), 404
     
-    candidate_name = resume['name']
-    jd_title = jd['title']
-    company = jd['company']
+    candidate_name = resume_info['name']
+    jd_title = jd_info['title']
+    company = jd_info['company']
     
-    log_processing_step("AI_FACILITATE", "PROGRESS", f"Matching {candidate_name} with {jd_title} @ {company}")
+    log_processing_step("PROFILE_GENERATION", "PROGRESS", f"Generating profiles for {candidate_name} with {jd_title} @ {company}")
     
-    # 简单的撮合分数计算（实际项目中会使用AI模型）
-    import random
-    facilitation_score = random.randint(60, 95)
+    # 2. 生成候选人求职画像
+    log_processing_step("PROFILE_GENERATION", "PROGRESS", "Generating candidate profile...")
+    candidate_profile = generate_candidate_profile(resume_info, jd_info)
     
-    strengths = ['技能匹配度高', '经验符合要求', '学历背景相符']
-    improvements = ['某些技能需要加强', '相关项目经验可以更丰富']
-    recommendation = '推荐' if facilitation_score >= 80 else '一般推荐' if facilitation_score >= 70 else '不推荐'
-
-    log_processing_step("FACILITATION_CALCULATION", "COMPLETE", f"Score: {facilitation_score}, Recommendation: {recommendation}")
-
-    # Store result in DB
-    log_processing_step("DATABASE_INSERT", "START", f"Storing facilitation result for {candidate_name} <-> {jd_title}")
-    cursor = conn.execute(
-        """
-        INSERT INTO facilitation_results (resume_id, jd_id, facilitation_score, strengths, improvements, recommendation)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (resume_id, jd_id, facilitation_score, json.dumps(strengths), json.dumps(improvements), recommendation)
-    )
-    conn.commit()
-    new_id = cursor.lastrowid
+    if not candidate_profile:
+        log_processing_step("PROFILE_GENERATION", "ERROR", "Failed to generate candidate profile")
+        return jsonify({'status': 'error', 'message': '生成候选人画像失败'}), 500
     
-    # Fetch the newly created record to return
-    new_facilitation_result = conn.execute('SELECT * FROM facilitation_results WHERE id = ?', (new_id,)).fetchone()
-
-    conn.close()
+    # 3. 生成企业招聘画像
+    log_processing_step("PROFILE_GENERATION", "PROGRESS", "Generating company profile...")
+    company_profile = generate_company_profile(jd_info)
     
-    log_processing_step("DATABASE_INSERT", "COMPLETE", f"Stored facilitation result (ID: {new_id})")
-    log_processing_step("AI_FACILITATE", "COMPLETE", f"Facilitation completed for {candidate_name} <-> {jd_title}")
+    if not company_profile:
+        log_processing_step("PROFILE_GENERATION", "ERROR", "Failed to generate company profile")
+        return jsonify({'status': 'error', 'message': '生成企业画像失败'}), 500
     
-    # Prepare data for JSON response
+    log_processing_step("PROFILE_GENERATION", "COMPLETE", f"Profile generation completed for {candidate_name} <-> {jd_title}")
+    
+    # 4. Prepare data for JSON response (只包含画像信息，不保存到数据库)
     result_to_return = {
-        'id': new_facilitation_result['id'],
-        'resume_id': resume_id,
-        'jd_id': jd_id,
-        'resume_name': resume['name'],
-        'jd_title': jd['title'],
-        'company': jd['company'],
-        'facilitation_score': facilitation_score,
-        'strengths': strengths,
-        'improvements': improvements,
-        'recommendation': recommendation,
-        'created_at': new_facilitation_result['created_at']
+        'resume_name': resume_info['name'],
+        'jd_title': jd_info['title'],
+        'company': jd_info['company'],
+        'candidate_profile': candidate_profile,
+        'company_profile': company_profile,
+        'generated_at': datetime.datetime.now().isoformat()
     }
     
     return jsonify({
         'status': 'success',
-        'message': 'AI撮合完成',
-        'facilitation': result_to_return
+        'message': '画像生成完成',
+        'profiles': result_to_return
     })
 
 # API: 获取单个撮合历史
