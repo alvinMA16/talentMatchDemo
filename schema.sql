@@ -34,18 +34,14 @@ CREATE TABLE job_descriptions (
 
 CREATE TABLE facilitation_results (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    resume_id INTEGER,
-    jd_id INTEGER,
+    resume_id INTEGER NOT NULL,
+    jd_id INTEGER NOT NULL,
     candidate_decision TEXT,
     recruiter_decision TEXT,
     final_result TEXT,
     conversation_log TEXT,
     session_summary TEXT,
-    facilitation_score INTEGER,
-    strengths TEXT,
-    improvements TEXT,
-    recommendation TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (resume_id) REFERENCES resumes (id) ON DELETE CASCADE,
-    FOREIGN KEY (jd_id) REFERENCES job_descriptions (id) ON DELETE CASCADE
+    FOREIGN KEY (resume_id) REFERENCES resumes (id),
+    FOREIGN KEY (jd_id) REFERENCES job_descriptions (id)
 ); 

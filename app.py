@@ -94,9 +94,9 @@ class MessageQueue:
         """获取对话历史（只包含chatting类型的消息）"""
         return self.get_messages(msg_type='chatting')
     
-    def get_latest_message(self, source=None):
+    def get_latest_message(self):
         """获取最新消息"""
-        messages = self.get_messages(source=source)
+        messages = self.get_messages()
         return messages[-1] if messages else None
     
     def clear(self):
@@ -123,6 +123,58 @@ class MessageQueue:
             'start_time': self.messages[0]['timestamp'] if self.messages else None,
             'end_time': self.messages[-1]['timestamp'] if self.messages else None
         }
+
+def get_history_for_agent(source_agent):
+    """
+    为指定的agent构建历史消息记录
+    - 自己source的所有消息
+    - 对方source的chatting类型消息
+    - 如果对方没有chatting消息，提供一个kickoff消息
+    """
+    history = []
+    opponent_agent = 'recruiter' if source_agent == 'candidate' else 'candidate'
+
+    print(f"[HistoryBuilder] 为 {source_agent.upper()} 构建历史记录...")
+
+    # 统计对方的chatting消息数量
+    opponent_chat_count = 0
+    
+    for msg in message_queue.messages:
+        role = 'assistant' if msg['source'] == source_agent else 'user'
+        
+        # 自己发的所有消息都要给到
+        if msg['source'] == source_agent:
+            # 对于自己的消息，将原始的 'planning', 'chatting', 'decision' 格式封装到 content 中
+            history.append({
+                "role": role,
+                "content": json.dumps({
+                    "type": msg['type'],
+                    "reasoning": msg['reasoning'],
+                    "payload": msg['payload']
+                }, ensure_ascii=False)
+            })
+            print(f"  [+] 添加自己的消息 (ID: {msg['id']}, Type: {msg['type']})")
+        # 对方发的 chatting 消息要给到
+        elif msg['source'] == opponent_agent and msg['type'] == 'chatting':
+            # 对于对方的聊天消息，只传递payload
+            history.append({
+                "role": role,
+                "content": msg['payload']
+            })
+            opponent_chat_count += 1
+            print(f"  [+] 添加对方的聊天消息 (ID: {msg['id']})")
+    
+    # 如果对方没有chatting消息，添加一个kickoff消息
+    if opponent_chat_count == 0:
+        kickoff_message = "您好，我想了解更多关于这个机会的信息。" if opponent_agent == 'candidate' else "您好，我想了解您的背景和经验。"
+        history.append({
+            "role": "user",
+            "content": kickoff_message
+        })
+        print(f"  [+] 添加kickoff消息 (对方暂无chatting消息)")
+    
+    print(f"[HistoryBuilder] 为 {source_agent.upper()} 构建完成，共 {len(history)} 条历史记录。")
+    return history
 
 # 全局消息队列实例
 message_queue = MessageQueue()
@@ -1324,7 +1376,7 @@ def ai_matching_stream():
             current_round = 1
             
             # 候选人agent先开始
-            candidate_response = candidate_agent.respond()
+            candidate_response = candidate_agent.respond(history=get_history_for_agent('candidate'))
             if candidate_response:
                 # 将响应添加到消息队列
                 message = create_message_from_agent_response(candidate_response, 'candidate')
@@ -1352,12 +1404,10 @@ def ai_matching_stream():
             
             # 开始对话循环
             while current_round < max_rounds and not candidate_agent.has_reached_decision() and not recruiter_agent.has_reached_decision():
-                # 获取最新的聊天消息给招聘方
-                latest_chat = message_queue.get_latest_message()
-                chat_content = latest_chat['payload'] if latest_chat and latest_chat['type'] == 'chatting' else None
-                
                 # 招聘方回应
-                recruiter_response = recruiter_agent.respond(chat_content)
+                recruiter_response = recruiter_agent.respond(
+                    history=get_history_for_agent('recruiter')
+                )
                 if recruiter_response:
                     # 将响应添加到消息队列
                     message = create_message_from_agent_response(recruiter_response, 'recruiter')
@@ -1388,12 +1438,10 @@ def ai_matching_stream():
                 if recruiter_agent.has_reached_decision():
                     break
                 
-                # 获取最新的聊天消息给候选人
-                latest_chat = message_queue.get_latest_message()
-                chat_content = latest_chat['payload'] if latest_chat and latest_chat['type'] == 'chatting' else None
-                
                 # 候选人回应
-                candidate_response = candidate_agent.respond(chat_content)
+                candidate_response = candidate_agent.respond(
+                    history=get_history_for_agent('candidate')
+                )
                 if candidate_response:
                     # 将响应添加到消息队列
                     message = create_message_from_agent_response(candidate_response, 'candidate')
@@ -1490,6 +1538,8 @@ def ai_matching_stream():
             # 发送完成信号
             yield f"data: {json.dumps({'type': 'complete', 'data': final_result, 'timestamp': datetime.datetime.now().isoformat()})}\n\n"
             
+        except GeneratorExit:
+            log_processing_step("AI_MATCHING_STREAM", "INFO", "Client disconnected, closing stream.")
         except Exception as e:
             error_message = f"撮合过程中发生错误: {str(e)}"
             log_processing_step("AI_MATCHING_STREAM", "ERROR", error_message)
