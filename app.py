@@ -4,9 +4,8 @@ from dotenv import load_dotenv
 # Load environment variables from .env file FIRST
 load_dotenv()
 
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, Response
-import json
 import sqlite3
+import json
 import pathlib
 import google.generativeai as genai
 import pandas as pd
@@ -14,11 +13,169 @@ import io
 from werkzeug.utils import secure_filename
 from helpers import get_prompt, get_db_connection, check_and_migrate_db, log_model_request, log_model_response, log_processing_step, log_batch_item, log_desensitization, log_queue, diagnose_json_error, get_resume_and_jd_info
 from resume_generator import resume_generator_bp
+from candidate_agent import CandidateAgent
+from recruiter_agent import RecruiterAgent
 import time
 import queue
 import os
 import datetime
 from openai import OpenAI
+from flask import Flask, render_template, request, jsonify, Response, stream_template
+
+# 简单的消息队列数据结构
+class MessageQueue:
+    """
+    简单的消息队列，用于存储撮合过程中的agent消息
+    每条消息包含：消息来源、消息类型、reasoning、payload、时间戳
+    """
+    def __init__(self):
+        self.messages = []  # 消息列表
+        self.session_id = None  # 当前会话ID
+    
+    def init_session(self, session_id):
+        """初始化新的撮合会话"""
+        self.session_id = session_id
+        self.messages = []
+        print(f"[MessageQueue] 初始化会话: {session_id}")
+    
+    def add_message(self, source, msg_type, reasoning, payload, timestamp=None):
+        """
+        添加消息到队列
+        
+        Args:
+            source (str): 消息来源 ('candidate' 或 'recruiter')
+            msg_type (str): 消息类型 ('planning', 'chatting', 'decision')
+            reasoning (str): 思考过程
+            payload (str): 消息内容
+            timestamp (str, optional): 时间戳，默认为当前时间
+        
+        Returns:
+            dict: 添加的消息对象
+        """
+        if timestamp is None:
+            timestamp = datetime.datetime.now().isoformat()
+        
+        message = {
+            'id': len(self.messages) + 1,  # 简单的消息ID
+            'source': source,
+            'type': msg_type,
+            'reasoning': reasoning,
+            'payload': payload,
+            'timestamp': timestamp,
+            'session_id': self.session_id
+        }
+        
+        self.messages.append(message)
+        print(f"[MessageQueue] 添加消息 #{message['id']}: {source} - {msg_type}")
+        return message
+    
+    def get_messages(self, source=None, msg_type=None):
+        """
+        获取消息列表，支持按来源和类型过滤
+        
+        Args:
+            source (str, optional): 过滤消息来源
+            msg_type (str, optional): 过滤消息类型
+        
+        Returns:
+            list: 消息列表
+        """
+        filtered_messages = self.messages
+        
+        if source:
+            filtered_messages = [msg for msg in filtered_messages if msg['source'] == source]
+        
+        if msg_type:
+            filtered_messages = [msg for msg in filtered_messages if msg['type'] == msg_type]
+        
+        return filtered_messages
+    
+    def get_chat_history(self):
+        """获取对话历史（只包含chatting类型的消息）"""
+        return self.get_messages(msg_type='chatting')
+    
+    def get_latest_message(self, source=None):
+        """获取最新消息"""
+        messages = self.get_messages(source=source)
+        return messages[-1] if messages else None
+    
+    def clear(self):
+        """清空消息队列"""
+        self.messages = []
+        print(f"[MessageQueue] 清空会话 {self.session_id} 的消息队列")
+    
+    def get_message_count(self):
+        """获取消息总数"""
+        return len(self.messages)
+    
+    def get_session_summary(self):
+        """获取会话摘要"""
+        chat_count = len(self.get_messages(msg_type='chatting'))
+        planning_count = len(self.get_messages(msg_type='planning'))
+        decision_count = len(self.get_messages(msg_type='decision'))
+        
+        return {
+            'session_id': self.session_id,
+            'total_messages': len(self.messages),
+            'chat_messages': chat_count,
+            'planning_messages': planning_count,
+            'decision_messages': decision_count,
+            'start_time': self.messages[0]['timestamp'] if self.messages else None,
+            'end_time': self.messages[-1]['timestamp'] if self.messages else None
+        }
+
+# 全局消息队列实例
+message_queue = MessageQueue()
+
+def create_message_from_agent_response(agent_response, source):
+    """
+    从agent响应创建消息对象并添加到队列
+    
+    Args:
+        agent_response (dict): agent的响应
+        source (str): 消息来源 ('candidate' 或 'recruiter')
+    
+    Returns:
+        dict: 创建的消息对象
+    """
+    if not agent_response or not isinstance(agent_response, dict):
+        return None
+    
+    msg_type = agent_response.get('type', 'unknown')
+    reasoning = agent_response.get('reasoning', '')
+    payload = agent_response.get('payload', '')
+    
+    return message_queue.add_message(
+        source=source,
+        msg_type=msg_type,
+        reasoning=reasoning,
+        payload=payload
+    )
+
+def get_chat_messages_for_agent(source):
+    """
+    获取指定agent可见的对话消息
+    
+    Args:
+        source (str): agent来源 ('candidate' 或 'recruiter')
+    
+    Returns:
+        list: 对话消息列表，格式化为agent可理解的格式
+    """
+    chat_messages = message_queue.get_chat_history()
+    formatted_messages = []
+    
+    for msg in chat_messages:
+        # 将消息格式化为agent可理解的格式
+        formatted_msg = {
+            'sender': msg['source'],
+            'content': msg['payload'],
+            'round': msg['id'],  # 使用消息ID作为轮次
+            'timestamp': msg['timestamp']
+        }
+        formatted_messages.append(formatted_msg)
+    
+    return formatted_messages
 
 # --- Database Setup ---
 DATABASE = 'talent_match.db'
@@ -255,11 +412,11 @@ def generate_candidate_profile(resume_info, jd_info):
             {"role": "user", "content": f"请基于以下信息生成候选人求职画像：\n\n{json.dumps(input_data, ensure_ascii=False, indent=2)}"}
         ]
         
-        log_model_request("o4-mini", "CANDIDATE_PROFILE_GENERATION", 
+        log_model_request("gpt-4o-mini", "CANDIDATE_PROFILE_GENERATION", 
                          f"Candidate: {resume_info['name']}, Position: {jd_info['title']}")
         
         response = openai_client.chat.completions.create(
-            model="o4-mini",
+            model="gpt-4o-mini",
             messages=messages,
             response_format={"type": "json_object"}
         )
@@ -1044,6 +1201,335 @@ def log_stream():
     
     return Response(generate_logs(), mimetype='text/event-stream', 
                    headers={'Cache-Control': 'no-cache'})
+
+# API: AI撮合流式接口（实时对话展示）
+@app.route('/api/ai_matching_stream', methods=['GET'])
+def ai_matching_stream():
+    resume_id = request.args.get('resume_id', type=int)
+    jd_id = request.args.get('jd_id', type=int)
+    profiles_param = request.args.get('profiles')
+    
+    if not resume_id or not jd_id:
+        return jsonify({'status': 'error', 'message': '请选择简历和职位'}), 400
+    
+    log_processing_step("AI_MATCHING_STREAM", "START", f"Starting streaming AI matching for Resume ID: {resume_id}, JD ID: {jd_id}")
+    
+    def generate_matching_stream():
+        try:
+            # 初始化消息队列会话
+            session_id = f"{resume_id}_{jd_id}_{int(time.time())}"
+            message_queue.init_session(session_id)
+            
+            # 发送开始信号
+            yield f"data: {json.dumps({'type': 'start', 'message': '开始AI撮合...', 'timestamp': datetime.datetime.now().isoformat()})}\n\n"
+            
+            # 1. 获取简历和JD的完整信息
+            yield f"data: {json.dumps({'type': 'progress', 'message': '正在获取简历和职位信息...', 'timestamp': datetime.datetime.now().isoformat()})}\n\n"
+            resume_info, jd_info = get_resume_and_jd_info(resume_id, jd_id)
+            
+            if not resume_info or not jd_info:
+                yield f"data: {json.dumps({'type': 'error', 'message': '找不到对应的简历或职位', 'timestamp': datetime.datetime.now().isoformat()})}\n\n"
+                return
+            
+            candidate_name = resume_info['name']
+            jd_title = jd_info['title']
+            company = jd_info['company']
+            
+            # 2. 获取或生成画像
+            if profiles_param:
+                # 使用传递的画像数据
+                try:
+                    profiles_data = json.loads(profiles_param)
+                    candidate_profile = profiles_data.get('candidate_profile')
+                    company_profile = profiles_data.get('company_profile')
+                    yield f"data: {json.dumps({'type': 'progress', 'message': '使用已生成的画像数据...', 'timestamp': datetime.datetime.now().isoformat()})}\n\n"
+                    
+                    if not candidate_profile or not company_profile:
+                        yield f"data: {json.dumps({'type': 'error', 'message': '画像数据不完整，请重新生成画像', 'timestamp': datetime.datetime.now().isoformat()})}\n\n"
+                        return
+                except (json.JSONDecodeError, KeyError) as e:
+                    yield f"data: {json.dumps({'type': 'error', 'message': '画像数据解析失败，请重新生成画像', 'timestamp': datetime.datetime.now().isoformat()})}\n\n"
+                    return
+            else:
+                # 重新生成画像（兼容旧流程）
+                yield f"data: {json.dumps({'type': 'progress', 'message': '正在生成候选人和企业画像...', 'timestamp': datetime.datetime.now().isoformat()})}\n\n"
+                candidate_profile = generate_candidate_profile(resume_info, jd_info)
+                company_profile = generate_company_profile(jd_info)
+                
+                if not candidate_profile or not company_profile:
+                    yield f"data: {json.dumps({'type': 'error', 'message': '生成画像失败，无法进行撮合', 'timestamp': datetime.datetime.now().isoformat()})}\n\n"
+                    return
+            
+            # 3. 准备Agent数据
+            yield f"data: {json.dumps({'type': 'progress', 'message': '正在准备代理数据...', 'timestamp': datetime.datetime.now().isoformat()})}\n\n"
+            
+            # 候选人agent看到：完整简历 + 脱敏JD + 候选人画像
+            full_resume = {
+                'name': resume_info['name'],
+                'email': resume_info['email'],
+                'phone': resume_info['phone'],
+                'skills': resume_info['skills'],
+                'summary': resume_info['summary'],
+                'experience': resume_info['experience'],
+                'education': resume_info['education'],
+                'publications': resume_info['publications'],
+                'projects': resume_info['projects']
+            }
+            
+            desensitized_jd = jd_info.get('desensitized_data') if jd_info.get('desensitized_data') else {
+                'title': jd_info['title'],
+                'company': '某公司',
+                'location': jd_info.get('location', '某城市'),
+                'salary': '面议',
+                'requirements': jd_info['requirements'],
+                'description': jd_info['description'],
+                'benefits': jd_info['benefits']
+            }
+            
+            # 招聘方agent看到：脱敏简历 + 完整JD + 企业画像
+            desensitized_resume = resume_info.get('desensitized_data') if resume_info.get('desensitized_data') else {
+                'name': '候选人',
+                'email': 'hidden@example.com',
+                'phone': '***-****-****',
+                'skills': resume_info['skills'],
+                'summary': resume_info['summary'],
+                'experience': resume_info['experience'],
+                'education': resume_info['education'],
+                'publications': resume_info['publications'],
+                'projects': resume_info['projects']
+            }
+            
+            full_jd = {
+                'title': jd_info['title'],
+                'company': jd_info['company'],
+                'location': jd_info['location'],
+                'salary': jd_info['salary'],
+                'requirements': jd_info['requirements'],
+                'description': jd_info['description'],
+                'benefits': jd_info['benefits']
+            }
+            
+            # 4. 创建双方agent
+            yield f"data: {json.dumps({'type': 'progress', 'message': '正在初始化候选人和企业代理...', 'timestamp': datetime.datetime.now().isoformat()})}\n\n"
+            candidate_agent = CandidateAgent(full_resume, desensitized_jd, candidate_profile)
+            recruiter_agent = RecruiterAgent(desensitized_resume, full_jd, company_profile)
+            
+            # 发送撮合信息
+            yield f"data: {json.dumps({'type': 'matching_info', 'data': {'resume_name': candidate_name, 'jd_title': jd_title, 'company': company}, 'timestamp': datetime.datetime.now().isoformat()})}\n\n"
+            
+            # 5. 开始agent对话撮合（使用消息队列）
+            yield f"data: {json.dumps({'type': 'progress', 'message': '开始代理对话撮合...', 'timestamp': datetime.datetime.now().isoformat()})}\n\n"
+            
+            max_rounds = 10  # 最大对话轮数
+            current_round = 1
+            
+            # 候选人agent先开始
+            candidate_response = candidate_agent.respond()
+            if candidate_response:
+                # 将响应添加到消息队列
+                message = create_message_from_agent_response(candidate_response, 'candidate')
+                if message:
+                    # 构造一个更简洁的数据结构
+                    data_payload = {
+                        'sender': 'candidate',
+                        'reasoning': message.get('reasoning'),
+                        'timestamp': message.get('timestamp')
+                    }
+                    message_type = message.get('type')
+
+                    if message_type == 'planning':
+                        data_payload['content'] = message.get('payload')
+                        yield f"data: {json.dumps({'type': 'planning', 'data': data_payload})}\n\n"
+                        time.sleep(0.5)
+                    elif message_type == 'chatting':
+                        data_payload['content'] = message.get('payload')
+                        data_payload['round'] = current_round
+                        yield f"data: {json.dumps({'type': 'chatting', 'data': data_payload})}\n\n"
+                        time.sleep(1)
+                    elif message_type == 'decision':
+                        data_payload['decision'] = message.get('payload')
+                        yield f"data: {json.dumps({'type': 'decision', 'data': data_payload})}\n\n"
+            
+            # 开始对话循环
+            while current_round < max_rounds and not candidate_agent.has_reached_decision() and not recruiter_agent.has_reached_decision():
+                # 获取最新的聊天消息给招聘方
+                latest_chat = message_queue.get_latest_message()
+                chat_content = latest_chat['payload'] if latest_chat and latest_chat['type'] == 'chatting' else None
+                
+                # 招聘方回应
+                recruiter_response = recruiter_agent.respond(chat_content)
+                if recruiter_response:
+                    # 将响应添加到消息队列
+                    message = create_message_from_agent_response(recruiter_response, 'recruiter')
+                    if message:
+                        # 构造一个更简洁的数据结构
+                        data_payload = {
+                            'sender': 'recruiter',
+                            'reasoning': message.get('reasoning'),
+                            'timestamp': message.get('timestamp')
+                        }
+                        message_type = message.get('type')
+
+                        if message_type == 'planning':
+                            data_payload['content'] = message.get('payload')
+                            yield f"data: {json.dumps({'type': 'planning', 'data': data_payload})}\n\n"
+                            time.sleep(0.5)
+                        elif message_type == 'chatting':
+                            data_payload['content'] = message.get('payload')
+                            data_payload['round'] = current_round
+                            yield f"data: {json.dumps({'type': 'chatting', 'data': data_payload})}\n\n"
+                            time.sleep(1)
+                        elif message_type == 'decision':
+                            data_payload['decision'] = message.get('payload')
+                            yield f"data: {json.dumps({'type': 'decision', 'data': data_payload})}\n\n"
+                            break
+                
+                # 如果招聘方已做决定，跳出循环
+                if recruiter_agent.has_reached_decision():
+                    break
+                
+                # 获取最新的聊天消息给候选人
+                latest_chat = message_queue.get_latest_message()
+                chat_content = latest_chat['payload'] if latest_chat and latest_chat['type'] == 'chatting' else None
+                
+                # 候选人回应
+                candidate_response = candidate_agent.respond(chat_content)
+                if candidate_response:
+                    # 将响应添加到消息队列
+                    message = create_message_from_agent_response(candidate_response, 'candidate')
+                    if message:
+                        # 构造一个更简洁的数据结构
+                        data_payload = {
+                            'sender': 'candidate',
+                            'reasoning': message.get('reasoning'),
+                            'timestamp': message.get('timestamp')
+                        }
+                        message_type = message.get('type')
+
+                        if message_type == 'planning':
+                            data_payload['content'] = message.get('payload')
+                            yield f"data: {json.dumps({'type': 'planning', 'data': data_payload})}\n\n"
+                            time.sleep(0.5)
+                        elif message_type == 'chatting':
+                            current_round += 1
+                            data_payload['content'] = message.get('payload')
+                            data_payload['round'] = current_round
+                            yield f"data: {json.dumps({'type': 'chatting', 'data': data_payload})}\n\n"
+                            time.sleep(1)
+                        elif message_type == 'decision':
+                            data_payload['decision'] = message.get('payload')
+                            yield f"data: {json.dumps({'type': 'decision', 'data': data_payload})}\n\n"
+                            break
+                
+                # 如果候选人已做决定，跳出循环
+                if candidate_agent.has_reached_decision():
+                    break
+            
+            # 6. 发送最终决策结果
+            final_decisions = {
+                'candidate_decision': candidate_agent.get_final_decision(),
+                'recruiter_decision': recruiter_agent.get_final_decision()
+            }
+            
+            yield f"data: {json.dumps({'type': 'decisions', 'data': final_decisions, 'timestamp': datetime.datetime.now().isoformat()})}\n\n"
+            
+            # 7. 计算最终结果
+            if final_decisions['candidate_decision'] == 'SUITABLE' and final_decisions['recruiter_decision'] == 'SUITABLE':
+                final_result = {
+                    'status': 'MATCH',
+                    'message': '双方撮合成功！',
+                    'icon': '🎉',
+                    'summary': f'{candidate_name} 和 {company} 的 {jd_title} 职位达成匹配'
+                }
+            elif final_decisions['candidate_decision'] == 'UNSUITABLE' or final_decisions['recruiter_decision'] == 'UNSUITABLE':
+                final_result = {
+                    'status': 'NO_MATCH',
+                    'message': '撮合未成功',
+                    'icon': '😔',
+                    'summary': '双方未能达成一致，撮合失败'
+                }
+            else:
+                final_result = {
+                    'status': 'UNCERTAIN',
+                    'message': '撮合结果不明确',
+                    'icon': '🤔',
+                    'summary': '需要进一步沟通确认'
+                }
+            
+            # 8. 保存撮合结果到数据库
+            try:
+                conn = get_db_connection()
+                
+                # 获取消息队列摘要
+                session_summary = message_queue.get_session_summary()
+                
+                conn.execute(
+                    """
+                    INSERT INTO facilitation_results 
+                    (resume_id, jd_id, candidate_decision, recruiter_decision, final_result, conversation_log, session_summary)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        resume_id,
+                        jd_id,
+                        final_decisions['candidate_decision'],
+                        final_decisions['recruiter_decision'],
+                        final_result['status'],
+                        json.dumps(message_queue.messages),  # 保存完整的消息队列
+                        json.dumps(session_summary)  # 保存会话摘要
+                    )
+                )
+                conn.commit()
+                conn.close()
+                
+                log_processing_step("AI_MATCHING_STREAM", "COMPLETE", f"Saved facilitation result: {final_result['status']}")
+                
+            except Exception as e:
+                log_processing_step("AI_MATCHING_STREAM", "ERROR", f"Failed to save result: {str(e)}")
+            
+            # 发送完成信号
+            yield f"data: {json.dumps({'type': 'complete', 'data': final_result, 'timestamp': datetime.datetime.now().isoformat()})}\n\n"
+            
+        except Exception as e:
+            error_message = f"撮合过程中发生错误: {str(e)}"
+            log_processing_step("AI_MATCHING_STREAM", "ERROR", error_message)
+            yield f"data: {json.dumps({'type': 'error', 'message': error_message, 'timestamp': datetime.datetime.now().isoformat()})}\n\n"
+        finally:
+            # 清理消息队列
+            message_queue.clear()
+    
+    return Response(generate_matching_stream(), mimetype='text/event-stream')
+
+# API: 获取当前消息队列状态（调试用）
+@app.route('/api/message_queue/status', methods=['GET'])
+def get_message_queue_status():
+    """获取当前消息队列状态，用于调试"""
+    try:
+        status = {
+            'session_id': message_queue.session_id,
+            'message_count': message_queue.get_message_count(),
+            'messages': message_queue.messages,
+            'summary': message_queue.get_session_summary() if message_queue.messages else None,
+            'latest_message': message_queue.get_latest_message(),
+            'chat_history': message_queue.get_chat_history()
+        }
+        return jsonify({'status': 'success', 'data': status})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# API: 清空消息队列（调试用）
+@app.route('/api/message_queue/clear', methods=['POST'])
+def clear_message_queue():
+    """清空当前消息队列，用于调试"""
+    try:
+        old_count = message_queue.get_message_count()
+        message_queue.clear()
+        return jsonify({
+            'status': 'success', 
+            'message': f'已清空消息队列，删除了 {old_count} 条消息'
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 # 错误处理
 @app.errorhandler(404)

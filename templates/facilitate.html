@@ -2,6 +2,192 @@
 
 {% block title %}人岗撮合 - Talent Match{% endblock %}
 
+{% block styles %}
+<style>
+.conversation-log {
+    background: #f8f9fa;
+    padding: 10px;
+}
+
+.message-container {
+    padding: 8px;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    transition: background-color 0.3s ease;
+}
+
+.message-container:has(.candidate-message) {
+    background-color: #e3f2fd; /* Light blue */
+}
+
+.message-container:has(.recruiter-message) {
+    background-color: #e8f5e9; /* Light green */
+}
+
+.message-bubble {
+    background-color: #ffffff;
+    border-radius: 6px;
+    padding: 12px;
+    max-width: 100%; /* Take full width of container */
+    word-wrap: break-word;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+
+.candidate-message {
+    border-left: 4px solid #2196f3;
+}
+
+.recruiter-message {
+    border-left: 4px solid #4caf50; /* Green border for recruiter */
+}
+
+.fade-in {
+    animation: fadeInUp 0.5s ease-out;
+}
+
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.real-time-indicator {
+    position: relative;
+    overflow: hidden;
+}
+
+.real-time-indicator::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+    animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+    0% { left: -100%; }
+    100% { left: 100%; }
+}
+
+.typing-indicator {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background-color: #6c757d;
+    opacity: 0.6;
+    animation: typing 1.4s infinite ease-in-out both;
+}
+
+.typing-indicator:nth-child(1) { animation-delay: -0.32s; }
+.typing-indicator:nth-child(2) { animation-delay: -0.16s; }
+
+@keyframes typing {
+    0%, 80%, 100% { 
+        transform: scale(0);
+        opacity: 0.5;
+    } 40% { 
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.decision-message {
+    animation: decisionPulse 0.6s ease-out;
+    border: 2px solid transparent !important;
+    position: relative;
+}
+
+.decision-message.alert-success {
+    background: linear-gradient(135deg, #d1edcc, #c3e6cb) !important;
+    border-color: #28a745 !important;
+}
+
+.decision-message.alert-danger {
+    background: linear-gradient(135deg, #f5c6cb, #f1b0b7) !important;
+    border-color: #dc3545 !important;
+}
+
+@keyframes decisionPulse {
+    0% {
+        transform: scale(0.95);
+        opacity: 0.8;
+    }
+    50% {
+        transform: scale(1.02);
+    }
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.sender-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    font-size: 0.9rem;
+}
+.sender-name {
+    font-weight: bold;
+    margin-left: 8px;
+}
+.sender-right {
+    color: #6c757d;
+    font-size: 0.8rem;
+}
+
+.message-field {
+    margin-bottom: 8px;
+    padding-left: 10px;
+    border-left: 2px solid #eee;
+}
+
+.field-label {
+    font-size: 0.7rem;
+    font-weight: bold;
+    color: #6c757d;
+    text-transform: uppercase;
+    margin-bottom: 2px;
+}
+
+.field-content {
+    font-size: 0.9rem;
+}
+
+.field-content.field-reasoning {
+    white-space: pre-wrap;
+    line-height: 1.4;
+}
+
+.field-type {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    background-color: #6c757d;
+    color: white;
+    font-size: 0.75rem;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+.message-timestamp {
+    font-size: 0.75rem;
+    color: #6c757d;
+    text-align: right;
+    margin-top: 8px;
+}
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="container-fluid">
     <div class="row">
@@ -121,9 +307,88 @@
                             </div>
                         </div>
                     </div>
+                    
+                    <!-- 实时撮合按钮 -->
+                    <div class="text-center mt-3">
+                        <button id="realTimeMatchingBtn" class="btn btn-primary btn-lg" onclick="startRealTimeMatching()" disabled>
+                            <i class="bi bi-chat-dots me-2"></i>开始AI撮合
+                        </button>
+                        <p class="text-muted small mt-2">AI代理将分别站在候选人和企业的立场进行实时撮合对话</p>
+                    </div>
 
                 </div>
             </div>
+            
+            <!-- AI撮合结果卡片 -->
+            <div id="matchingResultContainer" class="card d-none mt-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-robot me-2"></i>AI撮合过程</h5>
+                    <span id="matchingTime" class="badge bg-success fs-6 rounded-pill"></span>
+                </div>
+                <div class="card-body">
+                    <!-- 撮合信息 -->
+                    <div class="row mb-3">
+                        <div class="col-md-12">
+                            <h6><i class="bi bi-person-check me-2"></i>撮合对象: <span id="matchingInfo" class="fw-normal"></span></h6>
+                        </div>
+                    </div>
+                    
+                    <!-- 对话过程 -->
+                    <div class="conversation-container mb-4">
+                        <h6 class="mb-3"><i class="bi bi-chat-dots me-2"></i>双方代理对话过程</h6>
+                        <div id="conversationLog" class="conversation-log border rounded p-3" style="max-height: 400px; overflow-y: auto; background-color: #f8f9fa;">
+                            <!-- 对话内容将动态插入这里 -->
+                        </div>
+                    </div>
+                    
+                    <!-- 最终结果 -->
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="card h-100 shadow-sm">
+                                <div class="card-header bg-primary-subtle text-primary-emphasis">
+                                    <strong><i class="bi bi-person-badge me-2"></i>候选人代理决策</strong>
+                                </div>
+                                <div class="card-body">
+                                    <div id="candidateDecision">
+                                        <div class="text-center">
+                                            <div id="candidateDecisionIcon" class="mb-2"></div>
+                                            <h5 id="candidateDecisionText" class="mb-2"></h5>
+                                            <p id="candidateDecisionReason" class="text-muted small"></p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="card h-100 shadow-sm">
+                                <div class="card-header bg-warning-subtle text-warning-emphasis">
+                                    <strong><i class="bi bi-building me-2"></i>企业代理决策</strong>
+                                </div>
+                                <div class="card-body">
+                                    <div id="recruiterDecision">
+                                        <div class="text-center">
+                                            <div id="recruiterDecisionIcon" class="mb-2"></div>
+                                            <h5 id="recruiterDecisionText" class="mb-2"></h5>
+                                            <p id="recruiterDecisionReason" class="text-muted small"></p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 撮合总结 -->
+                    <div class="mt-4 text-center">
+                        <div id="finalMatchingResult" class="alert" role="alert">
+                            <h5 id="finalResultIcon" class="mb-2"></h5>
+                            <h4 id="finalResultText" class="mb-2"></h4>
+                            <p id="finalResultSummary" class="mb-0"></p>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+            
             <div id="profilePlaceholder" class="text-center py-5">
                  <i class="bi bi-person-badge display-1 text-muted"></i>
                 <h4 class="mt-3 text-muted">请选择简历和职位生成AI画像</h4>
@@ -254,6 +519,15 @@ function displayProfileResult(result) {
     document.getElementById('resultResumeName').innerText = result.resume_name;
     document.getElementById('resultJdTitle').innerText = `${result.jd_title} @ ${result.company}`;
 
+    // 存储画像数据供撮合时使用
+    window.currentProfiles = {
+        candidate_profile: result.candidate_profile,
+        company_profile: result.company_profile,
+        resume_name: result.resume_name,
+        jd_title: result.jd_title,
+        company: result.company
+    };
+
     // 显示候选人画像
     if (result.candidate_profile) {
         const profile = result.candidate_profile;
@@ -310,6 +584,414 @@ function displayProfileResult(result) {
             traitsDiv.innerHTML = '<span class="text-muted">暂无</span>';
         }
     }
+    
+    // 启用实时撮合按钮
+    document.getElementById('realTimeMatchingBtn').disabled = false;
 }
+
+
+
+// 实时撮合功能
+function startRealTimeMatching() {
+    const resumeId = document.getElementById('resumeSelect').value;
+    const jdId = document.getElementById('jdSelect').value;
+    
+    if (!resumeId || !jdId || resumeId.includes('请选择') || jdId.includes('请选择')) {
+        showToast('请先生成画像后再进行实时撮合', 'warning');
+        return;
+    }
+
+    // 检查是否已生成画像
+    if (!window.currentProfiles || !window.currentProfiles.candidate_profile || !window.currentProfiles.company_profile) {
+        showToast('请先生成画像后再进行实时撮合', 'warning');
+        return;
+    }
+
+    // 显示撮合结果容器
+    document.getElementById('matchingResultContainer').classList.remove('d-none');
+    document.getElementById('matchingTime').innerText = `开始时间: ${new Date().toLocaleTimeString()}`;
+    
+    // 清空之前的对话内容
+    const conversationLog = document.getElementById('conversationLog');
+    conversationLog.innerHTML = '<div class="text-center p-3"><i class="bi bi-hourglass-split me-2"></i>正在初始化撮合...</div>';
+    
+    // 禁用按钮
+    document.getElementById('realTimeMatchingBtn').disabled = true;
+    document.getElementById('realTimeMatchingBtn').innerHTML = '<i class="bi bi-hourglass-split me-2"></i>AI撮合中...';
+
+    // 创建EventSource连接，传递画像数据
+    const profilesParam = encodeURIComponent(JSON.stringify(window.currentProfiles));
+    const eventSource = new EventSource(`/api/ai_matching_stream?resume_id=${resumeId}&jd_id=${jdId}&profiles=${profilesParam}`);
+    
+    // 设置消息接收处理
+    eventSource.onmessage = function(event) {
+        try {
+            const data = JSON.parse(event.data);
+            handleRealTimeMessage(data);
+        } catch (error) {
+            console.error('解析实时消息错误:', error);
+        }
+    };
+    
+    // 错误处理
+    eventSource.onerror = function(event) {
+        console.error('EventSource连接错误:', event);
+        eventSource.close();
+        restoreMatchingButtons();
+        showToast('实时撮合连接出现问题', 'danger');
+    };
+    
+    // 存储EventSource引用以便后续关闭
+    window.currentEventSource = eventSource;
+}
+
+function handleRealTimeMessage(data) {
+    console.log('收到实时消息:', data); // 添加调试日志
+    const conversationLog = document.getElementById('conversationLog');
+    
+    switch(data.type) {
+        case 'start':
+        case 'progress':
+            // 显示进度消息
+            conversationLog.innerHTML = `<div class="text-center p-3 text-muted"><i class="bi bi-gear me-2"></i>${data.message}</div>`;
+            break;
+            
+        case 'matching_info':
+            // 显示撮合信息
+            document.getElementById('matchingInfo').innerText = `${data.data.resume_name} 与 ${data.data.jd_title} @ ${data.data.company}`;
+            conversationLog.innerHTML = '<div class="text-center p-3 text-success"><i class="bi bi-chat-dots me-2"></i>开始代理对话...</div>';
+            break;
+            
+        case 'planning':
+            // 显示planning消息
+            displayRealTimePlanning(data.data, data.type);
+            break;
+            
+        case 'chatting':
+            // 实时显示chatting消息
+            displayRealTimeChatting(data.data, data.type);
+            break;
+            
+        case 'decision':
+            // 显示决策
+            displayRealTimeAgentDecision(data.data);
+            // 同时在对话流中显示决策
+            displayRealTimeDecisionInChat(data.data, data.type);
+            break;
+            
+        case 'decisions':
+            // 显示最终决策
+            displayRealTimeDecisions(data.data);
+            break;
+            
+        case 'complete':
+            // 撮合完成
+            displayRealTimeFinalResult(data.data);
+            closeRealTimeConnection();
+            restoreMatchingButtons();
+            showToast('实时撮合完成！', 'success');
+            break;
+            
+        case 'error':
+            // 错误处理
+            conversationLog.innerHTML = `<div class="text-center p-3 text-danger"><i class="bi bi-exclamation-triangle me-2"></i>错误: ${data.message}</div>`;
+            closeRealTimeConnection();
+            restoreMatchingButtons();
+            showToast('实时撮合出现错误: ' + data.message, 'danger');
+            break;
+            
+        default:
+            console.log('未知消息类型:', data.type);
+    }
+}
+
+function displayRealTimePlanning(entry, type) {
+    console.log('显示planning消息:', entry);
+    const conversationLog = document.getElementById('conversationLog');
+    
+    // 如果是第一条消息，清空初始化文本
+    if (conversationLog.querySelector('.text-center')) {
+        conversationLog.innerHTML = '';
+    }
+    
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message-container fade-in';
+    
+    const senderIcon = entry.sender === 'candidate' ? 
+        '<i class="bi bi-person-badge"></i>' : 
+        '<i class="bi bi-building"></i>';
+    
+    const senderName = entry.sender === 'candidate' ? '候选人代理' : '企业代理';
+    const messageClass = entry.sender === 'candidate' ? 'candidate-message' : 'recruiter-message';
+    
+    messageDiv.innerHTML = `
+        <div class="message-bubble ${messageClass}">
+            <div class="sender-info">
+                <div class="sender-left">
+                    ${senderIcon}
+                    <span class="sender-name">${senderName}</span>
+                </div>
+                <div class="sender-right">
+                    正在制定计划...
+                </div>
+            </div>
+            
+            <div class="message-field">
+                <div class="field-label">Type</div>
+                <div class="field-content">
+                    <span class="field-type">${(type || 'PLANNING').toUpperCase()}</span>
+                </div>
+            </div>
+            
+            <div class="message-field">
+                <div class="field-label">Reasoning</div>
+                <div class="field-content field-reasoning">${(entry.reasoning || '').replace(/\n/g, '<br>')}</div>
+            </div>
+            
+            <div class="message-field">
+                <div class="field-label">Content</div>
+                <div class="field-content field-payload">${(entry.content || '').replace(/\n/g, '<br>')}</div>
+            </div>
+            
+            <div class="message-timestamp">
+                ${new Date(entry.timestamp).toLocaleTimeString()}
+            </div>
+        </div>
+    `;
+    
+    conversationLog.appendChild(messageDiv);
+    
+    // 滚动到底部
+    conversationLog.scrollTop = conversationLog.scrollHeight;
+}
+
+function displayRealTimeChatting(entry, type) {
+    console.log('显示chatting消息:', entry);
+    const conversationLog = document.getElementById('conversationLog');
+    
+    // 如果是第一条消息，清空初始化文本
+    if (conversationLog.querySelector('.text-center')) {
+        conversationLog.innerHTML = '';
+    }
+    
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message-container fade-in';
+    
+    const senderIcon = entry.sender === 'candidate' ? 
+        '<i class="bi bi-person-badge"></i>' : 
+        '<i class="bi bi-building"></i>';
+    
+    const senderName = entry.sender === 'candidate' ? '候选人代理' : '企业代理';
+    const messageClass = entry.sender === 'candidate' ? 'candidate-message' : 'recruiter-message';
+    
+    messageDiv.innerHTML = `
+        <div class="message-bubble ${messageClass}">
+            <div class="sender-info">
+                <div class="sender-left">
+                    ${senderIcon}
+                    <span class="sender-name">${senderName}</span>
+                </div>
+                <div class="sender-right">
+                    ${entry.round ? `第${entry.round}轮对话` : '对话中...'}
+                </div>
+            </div>
+            
+            <div class="message-field">
+                <div class="field-label">Type</div>
+                <div class="field-content">
+                    <span class="field-type">${(type || 'CHATTING').toUpperCase()}</span>
+                </div>
+            </div>
+
+            <div class="message-field">
+                <div class="field-label">Reasoning</div>
+                <div class="field-content field-reasoning">${(entry.reasoning || '').replace(/\n/g, '<br>')}</div>
+            </div>
+            
+            <div class="message-field">
+                <div class="field-label">Payload</div>
+                <div class="field-content field-payload">${(entry.content || entry.payload || '').replace(/\n/g, '<br>')}</div>
+            </div>
+            
+            <div class="message-timestamp">
+                ${new Date(entry.timestamp).toLocaleTimeString()}
+            </div>
+        </div>
+    `;
+    
+    conversationLog.appendChild(messageDiv);
+    
+    // 滚动到底部
+    conversationLog.scrollTop = conversationLog.scrollHeight;
+}
+
+function displayRealTimeAgentDecision(entry) {
+    // 根据agent类型显示决策
+    if (entry.sender === 'candidate') {
+        const candidateDecision = entry.decision;
+        if (candidateDecision === '同意') {
+            document.getElementById('candidateDecisionIcon').innerHTML = '<i class="bi bi-check-circle-fill text-success display-4"></i>';
+            document.getElementById('candidateDecisionText').innerText = '同意';
+            document.getElementById('candidateDecisionText').className = 'mb-2 text-success';
+        } else if (candidateDecision === '拒绝') {
+            document.getElementById('candidateDecisionIcon').innerHTML = '<i class="bi bi-x-circle-fill text-danger display-4"></i>';
+            document.getElementById('candidateDecisionText').innerText = '拒绝';
+            document.getElementById('candidateDecisionText').className = 'mb-2 text-danger';
+        }
+    } else if (entry.sender === 'recruiter') {
+        const recruiterDecision = entry.decision;
+        if (recruiterDecision === '同意') {
+            document.getElementById('recruiterDecisionIcon').innerHTML = '<i class="bi bi-check-circle-fill text-success display-4"></i>';
+            document.getElementById('recruiterDecisionText').innerText = '同意';
+            document.getElementById('recruiterDecisionText').className = 'mb-2 text-success';
+        } else if (recruiterDecision === '拒绝') {
+            document.getElementById('recruiterDecisionIcon').innerHTML = '<i class="bi bi-x-circle-fill text-danger display-4"></i>';
+            document.getElementById('recruiterDecisionText').innerText = '拒绝';
+            document.getElementById('recruiterDecisionText').className = 'mb-2 text-danger';
+        }
+    }
+}
+
+function displayRealTimeDecisionInChat(entry, type) {
+    const conversationLog = document.getElementById('conversationLog');
+    
+    // 如果是第一条消息，清空初始化文本
+    if (conversationLog.querySelector('.text-center')) {
+        conversationLog.innerHTML = '';
+    }
+    
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message-container fade-in';
+    
+    const senderIcon = entry.sender === 'candidate' ? 
+        '<i class="bi bi-person-badge"></i>' : 
+        '<i class="bi bi-building"></i>';
+    
+    const senderName = entry.sender === 'candidate' ? '候选人代理' : '企业代理';
+    const messageClass = entry.sender === 'candidate' ? 'candidate-message' : 'recruiter-message';
+    
+    // 根据决策内容选择特殊样式
+    let decisionClass = 'decision-message';
+    if (entry.decision === '同意' || entry.payload === '同意') {
+        decisionClass += ' alert-success';
+    } else if (entry.decision === '拒绝' || entry.payload === '拒绝') {
+        decisionClass += ' alert-danger';
+    }
+    
+    const decisionContent = entry.decision || entry.payload || entry.content || '';
+    
+    messageDiv.innerHTML = `
+        <div class="message-bubble ${messageClass} ${decisionClass}">
+            <div class="sender-info">
+                <div class="sender-left">
+                    ${senderIcon}
+                    <span class="sender-name">${senderName}</span>
+                </div>
+                <div class="sender-right">
+                    <strong>最终决策</strong>
+                </div>
+            </div>
+            
+            <div class="message-field">
+                <div class="field-label">Type</div>
+                <div class="field-content">
+                    <span class="field-type">${(type || 'DECISION').toUpperCase()}</span>
+                </div>
+            </div>
+            
+            <div class="message-field">
+                <div class="field-label">Reasoning</div>
+                <div class="field-content field-reasoning">${(entry.reasoning || '').replace(/\n/g, '<br>')}</div>
+            </div>
+            
+            <div class="message-field">
+                <div class="field-label">Payload</div>
+                <div class="field-content field-payload">
+                    <strong style="font-size: 1.1rem;">${decisionContent}</strong>
+                </div>
+            </div>
+            
+            <div class="message-timestamp">
+                ${new Date(entry.timestamp).toLocaleTimeString()}
+            </div>
+        </div>
+    `;
+    
+    conversationLog.appendChild(messageDiv);
+    
+    // 滚动到底部
+    conversationLog.scrollTop = conversationLog.scrollHeight;
+}
+
+function displayRealTimeDecisions(decisions) {
+    // 显示候选人决策
+    const candidateDecision = decisions.candidate_decision;
+    if (candidateDecision === 'SUITABLE') {
+        document.getElementById('candidateDecisionIcon').innerHTML = '<i class="bi bi-check-circle-fill text-success display-4"></i>';
+        document.getElementById('candidateDecisionText').innerText = '合适';
+        document.getElementById('candidateDecisionText').className = 'mb-2 text-success';
+    } else if (candidateDecision === 'UNSUITABLE') {
+        document.getElementById('candidateDecisionIcon').innerHTML = '<i class="bi bi-x-circle-fill text-danger display-4"></i>';
+        document.getElementById('candidateDecisionText').innerText = '不合适';
+        document.getElementById('candidateDecisionText').className = 'mb-2 text-danger';
+    } else {
+        document.getElementById('candidateDecisionIcon').innerHTML = '<i class="bi bi-question-circle-fill text-muted display-4"></i>';
+        document.getElementById('candidateDecisionText').innerText = '未明确决策';
+        document.getElementById('candidateDecisionText').className = 'mb-2 text-muted';
+    }
+
+    // 显示企业决策
+    const recruiterDecision = decisions.recruiter_decision;
+    if (recruiterDecision === 'SUITABLE') {
+        document.getElementById('recruiterDecisionIcon').innerHTML = '<i class="bi bi-check-circle-fill text-success display-4"></i>';
+        document.getElementById('recruiterDecisionText').innerText = '合适';
+        document.getElementById('recruiterDecisionText').className = 'mb-2 text-success';
+    } else if (recruiterDecision === 'UNSUITABLE') {
+        document.getElementById('recruiterDecisionIcon').innerHTML = '<i class="bi bi-x-circle-fill text-danger display-4"></i>';
+        document.getElementById('recruiterDecisionText').innerText = '不合适';
+        document.getElementById('recruiterDecisionText').className = 'mb-2 text-danger';
+    } else {
+        document.getElementById('recruiterDecisionIcon').innerHTML = '<i class="bi bi-question-circle-fill text-muted display-4"></i>';
+        document.getElementById('recruiterDecisionText').innerText = '未明确决策';
+        document.getElementById('recruiterDecisionText').className = 'mb-2 text-muted';
+    }
+}
+
+function displayRealTimeFinalResult(result) {
+    // 显示最终撮合结果
+    const finalResult = document.getElementById('finalMatchingResult');
+    if (result.matching_result === 'MATCHED') {
+        finalResult.className = 'alert alert-success';
+        document.getElementById('finalResultIcon').innerHTML = '<i class="bi bi-heart-fill text-success"></i>';
+        document.getElementById('finalResultText').innerText = '撮合成功！';
+        document.getElementById('finalResultSummary').innerText = '双方代理都认为这是一个合适的匹配';
+    } else {
+        finalResult.className = 'alert alert-warning';
+        document.getElementById('finalResultIcon').innerHTML = '<i class="bi bi-exclamation-triangle-fill text-warning"></i>';
+        document.getElementById('finalResultText').innerText = '撮合未成功';
+        document.getElementById('finalResultSummary').innerText = '至少有一方代理认为不合适，建议进一步沟通或寻找其他机会';
+    }
+    
+    // 更新完成时间
+    document.getElementById('matchingTime').innerText = `完成时间: ${new Date().toLocaleTimeString()}`;
+}
+
+function closeRealTimeConnection() {
+    if (window.currentEventSource) {
+        window.currentEventSource.close();
+        window.currentEventSource = null;
+    }
+}
+
+function restoreMatchingButtons() {
+    // 恢复按钮状态
+    document.getElementById('realTimeMatchingBtn').disabled = false;
+    document.getElementById('realTimeMatchingBtn').innerHTML = '<i class="bi bi-chat-dots me-2"></i>开始AI撮合';
+}
+
+// 页面卸载时关闭连接
+window.addEventListener('beforeunload', function() {
+    closeRealTimeConnection();
+});
 </script>
 {% endblock %} 

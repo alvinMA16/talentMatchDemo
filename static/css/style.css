@@ -185,4 +185,351 @@ code {
     padding: 0.125rem 0.25rem;
     border-radius: 0.25rem;
     font-size: 0.875rem;
+}
+
+/* 实时撮合消息样式 */
+.message-container {
+    margin-bottom: 1.5rem;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+.message-bubble {
+    width: 100%;
+    max-width: 100%;
+    border-radius: 12px;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+    padding: 1.25rem;
+    position: relative;
+    overflow: hidden;
+}
+
+/* 候选人消息样式 - 浅蓝色 */
+.candidate-message {
+    background: linear-gradient(135deg, #e1f5fe 0%, #f0f8ff 100%);
+    border-left: 5px solid #1976d2;
+}
+
+.candidate-message::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #1976d2, #42a5f5);
+}
+
+/* 企业方消息样式 - 浅绿色 */
+.recruiter-message {
+    background: linear-gradient(135deg, #e8f5e8 0%, #f1f8e9 100%);
+    border-left: 5px solid #388e3c;
+}
+
+.recruiter-message::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #388e3c, #66bb6a);
+}
+
+/* 发送者信息样式 */
+.sender-info {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 2px solid rgba(0, 0, 0, 0.05);
+    width: 100%;
+}
+
+.sender-info .sender-left {
+    display: flex;
+    align-items: center;
+}
+
+.sender-info .bi {
+    font-size: 1.4rem;
+    margin-right: 0.75rem;
+}
+
+.candidate-message .sender-info .bi {
+    color: #1976d2;
+}
+
+.recruiter-message .sender-info .bi {
+    color: #388e3c;
+}
+
+.sender-name {
+    font-weight: 700;
+    font-size: 1rem;
+    color: #2c3e50;
+}
+
+.sender-info .sender-right {
+    font-size: 0.8rem;
+    color: #6c757d;
+    font-weight: 500;
+}
+
+/* 消息字段样式 */
+.message-field {
+    margin-bottom: 1rem;
+    width: 100%;
+}
+
+.message-field:last-child {
+    margin-bottom: 0;
+}
+
+.field-label {
+    font-weight: 700;
+    font-size: 0.75rem;
+    color: #495057;
+    margin-bottom: 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    display: flex;
+    align-items: center;
+}
+
+.field-label::before {
+    content: '';
+    width: 4px;
+    height: 4px;
+    background-color: currentColor;
+    border-radius: 50%;
+    margin-right: 0.5rem;
+}
+
+.field-content {
+    padding: 0.875rem 1rem;
+    background-color: rgba(255, 255, 255, 0.8);
+    border-radius: 8px;
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    font-size: 0.95rem;
+    line-height: 1.6;
+    word-wrap: break-word;
+    position: relative;
+}
+
+/* 不同字段类型的特殊样式 */
+.field-type {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    font-weight: 700;
+    text-align: center;
+    padding: 0.4rem 1rem;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    display: inline-block;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    box-shadow: 0 2px 6px rgba(102, 126, 234, 0.3);
+}
+
+.field-reasoning {
+    font-style: italic;
+    color: #5a6c7d;
+    background-color: rgba(108, 117, 125, 0.08);
+    border-left: 3px solid #6c757d;
+    position: relative;
+}
+
+.field-reasoning::before {
+    content: '"';
+    position: absolute;
+    top: 0.5rem;
+    left: 0.5rem;
+    font-size: 1.5rem;
+    color: #6c757d;
+    opacity: 0.5;
+}
+
+.field-payload {
+    font-weight: 600;
+    color: #2c3e50;
+    background-color: rgba(255, 255, 255, 0.9);
+    border-left: 3px solid;
+}
+
+.candidate-message .field-payload {
+    border-left-color: #1976d2;
+}
+
+.recruiter-message .field-payload {
+    border-left-color: #388e3c;
+}
+
+/* Planning消息特殊样式 */
+.planning-message {
+    background: linear-gradient(135deg, #fff8e1 0%, #fffde7 100%);
+    border: 2px dashed #ffa726;
+    border-left: 5px solid #ff9800;
+    opacity: 0.95;
+}
+
+.planning-message::before {
+    background: linear-gradient(90deg, #ff9800, #ffa726);
+}
+
+.planning-message .field-label {
+    color: #e65100;
+}
+
+.planning-message .sender-info .bi {
+    color: #ff9800 !important;
+}
+
+/* Decision消息特殊样式 */
+.decision-message {
+    border-width: 3px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+    transform: scale(1.02);
+}
+
+.decision-agree {
+    background: linear-gradient(135deg, #c8e6c9 0%, #e8f5e8 100%);
+    border-color: #2e7d32;
+    animation: pulse-success 3s infinite;
+}
+
+.decision-agree::before {
+    background: linear-gradient(90deg, #2e7d32, #4caf50);
+}
+
+.decision-reject {
+    background: linear-gradient(135deg, #ffcdd2 0%, #ffebee 100%);
+    border-color: #c62828;
+    animation: pulse-danger 3s infinite;
+}
+
+.decision-reject::before {
+    background: linear-gradient(90deg, #c62828, #f44336);
+}
+
+@keyframes pulse-success {
+    0% { 
+        box-shadow: 0 6px 20px rgba(46, 125, 50, 0.2);
+        transform: scale(1.02);
+    }
+    50% { 
+        box-shadow: 0 8px 25px rgba(46, 125, 50, 0.4);
+        transform: scale(1.03);
+    }
+    100% { 
+        box-shadow: 0 6px 20px rgba(46, 125, 50, 0.2);
+        transform: scale(1.02);
+    }
+}
+
+@keyframes pulse-danger {
+    0% { 
+        box-shadow: 0 6px 20px rgba(198, 40, 40, 0.2);
+        transform: scale(1.02);
+    }
+    50% { 
+        box-shadow: 0 8px 25px rgba(198, 40, 40, 0.4);
+        transform: scale(1.03);
+    }
+    100% { 
+        box-shadow: 0 6px 20px rgba(198, 40, 40, 0.2);
+        transform: scale(1.02);
+    }
+}
+
+/* 时间戳样式 */
+.message-timestamp {
+    text-align: right;
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid rgba(0, 0, 0, 0.08);
+    font-size: 0.8rem;
+    color: #6c757d;
+    font-weight: 500;
+    width: 100%;
+}
+
+/* 对话日志容器 */
+#conversationLog {
+    max-height: 70vh;
+    overflow-y: auto;
+    padding: 1.5rem;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border-radius: 12px;
+    border: 1px solid #dee2e6;
+    position: relative;
+}
+
+#conversationLog::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(0,0,0,0.1), transparent);
+}
+
+/* 滚动条样式 */
+#conversationLog::-webkit-scrollbar {
+    width: 8px;
+}
+
+#conversationLog::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.05);
+    border-radius: 4px;
+}
+
+#conversationLog::-webkit-scrollbar-thumb {
+    background: linear-gradient(135deg, #6c757d, #495057);
+    border-radius: 4px;
+}
+
+#conversationLog::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(135deg, #495057, #343a40);
+}
+
+/* 淡入动画增强 */
+.fade-in {
+    animation: messageSlideIn 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+@keyframes messageSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(30px) scale(0.95);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+    .message-bubble {
+        padding: 1rem;
+    }
+    
+    .field-content {
+        padding: 0.75rem;
+        font-size: 0.9rem;
+    }
+    
+    .sender-info .bi {
+        font-size: 1.2rem;
+    }
+    
+    .sender-name {
+        font-size: 0.9rem;
+    }
 } 
