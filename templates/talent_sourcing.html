@@ -107,6 +107,7 @@
         const chatInput = document.querySelector('.chat-input textarea');
         const sendButton = document.querySelector('.chat-input button');
         let chatHistory = []; // Array to store the history of the conversation
+        let abortController = null; // To control fetch request
 
         function adjustHeight() {
             const navbarHeight = document.querySelector('.navbar').offsetHeight;
@@ -121,6 +122,30 @@
         function autoGrowTextarea() {
             chatInput.style.height = 'auto'; // Reset height to recalculate
             chatInput.style.height = (chatInput.scrollHeight) + 'px'; // Set to content height
+        }
+
+        function changeButtonToSendState() {
+            sendButton.innerHTML = '<i class="bi bi-send-fill"></i> 发送';
+            sendButton.classList.remove('btn-danger');
+            sendButton.classList.add('btn-primary');
+            chatInput.disabled = false;
+            chatInput.placeholder = '在这里输入您的问题或指令...';
+            sendButton.onclick = handleSendMessage;
+        }
+
+        function changeButtonToTerminateState() {
+            sendButton.innerHTML = '<i class="bi bi-stop-circle-fill"></i> 终止';
+            sendButton.classList.add('btn-danger');
+            sendButton.classList.remove('btn-primary');
+            chatInput.disabled = true;
+            chatInput.placeholder = 'Agent正在工作中，请稍候...';
+            sendButton.onclick = handleTerminate;
+        }
+
+        function handleTerminate() {
+            if (abortController) {
+                abortController.abort();
+            }
         }
 
         function addMessageToUI(sender, text, type = 'text') {
@@ -178,7 +203,7 @@
 
         function renderAgentMessage(agent, data) {
             let title, body;
-            let senderType = 'assistant'; // Default sender for system messages
+            let senderType = 'hr'; // Default sender for system messages
 
             switch(agent) {
                 case 'planner_output':
@@ -192,10 +217,24 @@
                     title = '💬 Agent 状态';
                     body = `<p class="mb-0">${data.message}</p>`;
                     break;
+                case 'tool_call':
+                    senderType = 'executor';
+                    title = `🛠️ 工具调用: ${data.tool}`;
+                    body = `<pre>${JSON.stringify(data.parameters, null, 2)}</pre>`;
+                    break;
                 case 'executor_output':
                     senderType = 'executor';
-                    title = `🐴 executor 执行中... (第${data.step}步)`;
-                    body = `<pre class="mb-0">${data.result}</pre>`;
+                    title = `✅ 执行结果 (第${data.step}步)`;
+                    
+                    let result_content = data.result;
+                    try {
+                        // Try to parse and prettify if the result is a JSON string
+                        const pretty_json = JSON.stringify(JSON.parse(result_content), null, 2);
+                        result_content = pretty_json;
+                    } catch (e) {
+                        // Not a JSON string, leave as is. It's likely a content generation result.
+                    }
+                    body = `<pre class="mb-0 bg-white p-2 rounded">${result_content}</pre>`;
                     break;
                 case 'observer_output':
                     senderType = 'observer';
@@ -230,13 +269,16 @@
             
             chatInput.value = '';
             setTimeout(autoGrowTextarea, 0); 
-            sendButton.disabled = true;
+            
+            changeButtonToTerminateState();
+            abortController = new AbortController();
 
             try {
                 const response = await fetch('/api/talent_sourcing/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message: messageText, history: chatHistory.slice(0, -1) }) // Exclude current user message
+                    body: JSON.stringify({ message: messageText, history: chatHistory.slice(0, -1) }), // Exclude current user message
+                    signal: abortController.signal
                 });
 
                 if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
@@ -266,17 +308,21 @@
                     }
                 }
             } catch (error) {
-                renderAgentMessage('error', { message: error.message });
-                console.error('Error fetching chat response:', error);
+                if (error.name === 'AbortError') {
+                    renderAgentMessage('status_update', { message: '任务已被用户终止。' });
+                } else {
+                    renderAgentMessage('error', { message: error.message });
+                }
+                console.error('Chat process error:', error);
             } finally {
-                sendButton.disabled = false;
+                changeButtonToSendState();
                 chatInput.focus();
             }
         }
 
-        sendButton.addEventListener('click', handleSendMessage);
+        sendButton.onclick = handleSendMessage;
         chatInput.addEventListener('keydown', (event) => {
-            if (event.key === 'Enter' && !event.shiftKey) {
+            if (!chatInput.disabled && event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
                 handleSendMessage();
             }

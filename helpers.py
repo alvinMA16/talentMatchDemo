@@ -212,3 +212,45 @@ def get_resume_and_jd_info(resume_id, jd_id):
         return None, None
     finally:
         conn.close() 
+
+def find_jd_by_id_or_title(jd_id: int = None, title: str = None) -> str:
+    """
+    根据职位ID或职位名称从数据库中查询职位描述(JD)。
+    优先使用 ID 查询。如果两者都未提供，则返回错误。
+    
+    Args:
+        jd_id (int, optional): 职位的数据库ID。
+        title (str, optional): 职位的标题。
+        
+    Returns:
+        str: 一个JSON字符串，包含查询到的JD信息或错误信息。
+    """
+    if not jd_id and not title:
+        return json.dumps({"status": "error", "message": "必须提供职位ID或职位名称。"})
+
+    conn = get_db_connection()
+    try:
+        if jd_id:
+            log_processing_step("JD_TOOL_SEARCH", "START", f"通过ID查询JD: {jd_id}")
+            query = 'SELECT * FROM job_descriptions WHERE id = ?'
+            params = (jd_id,)
+        else:
+            log_processing_step("JD_TOOL_SEARCH", "START", f"通过标题查询JD: {title}")
+            # 使用LIKE进行模糊匹配，并优先选择最新的一个
+            query = 'SELECT * FROM job_descriptions WHERE title LIKE ? ORDER BY created_at DESC LIMIT 1'
+            params = (f'%{title}%',)
+
+        jd = conn.execute(query, params).fetchone()
+
+        if jd:
+            jd_dict = dict(jd)
+            log_processing_step("JD_TOOL_SEARCH", "COMPLETE", f"成功找到JD: {jd_dict['title']} (ID: {jd_dict['id']})")
+            return json.dumps({"status": "success", "data": jd_dict}, ensure_ascii=False, indent=2)
+        else:
+            log_processing_step("JD_TOOL_SEARCH", "COMPLETE", "未找到对应的JD。")
+            return json.dumps({"status": "not_found", "message": "未找到对应的职位描述。"})
+    except Exception as e:
+        log_processing_step("JD_TOOL_SEARCH", "ERROR", f"数据库查询JD时出错: {str(e)}")
+        return json.dumps({"status": "error", "message": f"数据库查询时发生错误: {str(e)}"})
+    finally:
+        conn.close() 
