@@ -13,6 +13,7 @@ import io
 from werkzeug.utils import secure_filename
 from helpers import get_prompt, get_db_connection, check_and_migrate_db, log_model_request, log_model_response, log_processing_step, log_batch_item, log_desensitization, log_queue, diagnose_json_error, get_resume_and_jd_info
 from resume_generator import resume_generator_bp
+from talent_sourcing_agent import talent_sourcing_bp
 from candidate_agent import CandidateAgent
 from recruiter_agent import RecruiterAgent
 import time
@@ -577,6 +578,7 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB
 
 # Register Blueprints
 app.register_blueprint(resume_generator_bp)
+app.register_blueprint(talent_sourcing_bp)
 
 # Initialize and migrate database
 with app.app_context():
@@ -632,19 +634,7 @@ def resume_management():
 # JD管理页面
 @app.route('/jd')
 def jd_management():
-    conn = get_db_connection()
-    jds_from_db = conn.execute('SELECT * FROM job_descriptions ORDER BY created_at DESC').fetchall()
-    conn.close()
-    job_descriptions = [dict(jd) for jd in jds_from_db]
-    
-    # Parse desensitized data for each JD
-    for jd in job_descriptions:
-        try:
-            jd['desensitized'] = json.loads(jd['desensitized_json']) if jd.get('desensitized_json') else None
-        except (json.JSONDecodeError, TypeError):
-            jd['desensitized'] = None
-    
-    return render_template('jd.html', job_descriptions=job_descriptions)
+    return render_template('jd.html')
 
 # 人岗撮合页面
 @app.route('/facilitate')
@@ -678,17 +668,14 @@ def talent_facilitate():
 # API: 批量上传简历 (处理单个文件)
 @app.route('/api/resume/batch_upload', methods=['POST'])
 def batch_upload_resume():
-    if 'resume_file' not in request.files:
+    if 'files' not in request.files:
         return jsonify({'status': 'error', 'message': 'No file part in the request'}), 400
 
-    file = request.files['resume_file']
-    if file.filename == '':
-        return jsonify({'status': 'error', 'message': 'No file selected'}), 400
-
-    if not file or not file.filename.endswith('.pdf'):
+    files = request.files.getlist('files')
+    if not files or not files[0].filename.endswith('.pdf'):
         return jsonify({'status': 'error', 'message': 'Invalid file type, only PDF is supported'}), 400
 
-    log_processing_step("RESUME_BATCH_UPLOAD", "START", f"Processing file: {file.filename}")
+    log_processing_step("RESUME_BATCH_UPLOAD", "START", f"Processing {len(files)} files")
     
     try:
         # 1. AI Parsing
@@ -696,7 +683,7 @@ def batch_upload_resume():
             log_processing_step("RESUME_BATCH_UPLOAD", "ERROR", "Google API Key not configured")
             return jsonify({'status': 'error', 'message': 'Google API Key not configured'}), 500
 
-        pdf_bytes = file.read()
+        pdf_bytes = files[0].read()
         model = genai.GenerativeModel('gemini-1.5-flash')
         
         prompt = get_prompt('extract_resume_info.txt')
@@ -705,7 +692,7 @@ def batch_upload_resume():
             return jsonify({'status': 'error', 'message': 'Could not load resume extraction prompt.'}), 500
 
         # Log model request
-        log_model_request("gemini-1.5-flash", "RESUME_EXTRACTION", f"PDF file: {file.filename}")
+        log_model_request("gemini-1.5-flash", "RESUME_EXTRACTION", f"PDF file: {files[0].filename}")
 
         response = model.generate_content([
             {"mime_type": "application/pdf", "data": pdf_bytes},
@@ -765,12 +752,12 @@ def batch_upload_resume():
         conn.close()
         
         log_processing_step("DATABASE_INSERT", "COMPLETE", f"Successfully inserted: {name}")
-        log_processing_step("RESUME_BATCH_UPLOAD", "COMPLETE", f"Successfully processed: {file.filename}")
+        log_processing_step("RESUME_BATCH_UPLOAD", "COMPLETE", f"Successfully processed: {files[0].filename}")
         
         return jsonify({'status': 'success', 'message': 'Resume added successfully'})
 
     except Exception as e:
-        log_processing_step("RESUME_BATCH_UPLOAD", "ERROR", f"Error processing {file.filename}: {str(e)}")
+        log_processing_step("RESUME_BATCH_UPLOAD", "ERROR", f"Error processing {files[0].filename}: {str(e)}")
         log_model_response("gemini-1.5-flash", "RESUME_EXTRACTION", success=False, error_msg=str(e))
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
@@ -1585,6 +1572,11 @@ def clear_message_queue():
 @app.errorhandler(404)
 def not_found(error):
     return render_template('404.html'), 404
+
+@app.route('/talent_sourcing')
+def talent_sourcing():
+    """人才猎头页面"""
+    return render_template('talent_sourcing.html')
 
 if __name__ == '__main__':
     # 开发环境运行配置

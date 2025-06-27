@@ -1,0 +1,294 @@
+{% extends "base.html" %}
+
+{% block title %}人才猎头 - Talent Match{% endblock %}
+
+{% block head %}
+<style>
+    /* 确保主内容区域占据全高 */
+    html, body {
+        height: 100%;
+    }
+    .main-content-flex {
+        display: flex;
+        flex-direction: column;
+        height: calc(100vh - 56px - 69px); /* 视口高度 - 导航栏高度 - 页脚高度 */
+    }
+    .talent-sourcing-container {
+        flex-grow: 1;
+        display: flex;
+    }
+    .content-preview, .chat-window {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        padding: 0 15px;
+    }
+    .card-full-height {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+    }
+    .card-body-scrollable {
+        flex-grow: 1;
+        overflow-y: auto;
+    }
+    .chat-messages {
+        flex-grow: 1;
+        overflow-y: auto;
+        padding: 10px;
+        margin-bottom: 10px;
+        border: 1px solid #e9ecef;
+        border-radius: 0.25rem;
+    }
+    .chat-input textarea {
+        resize: none;
+        overflow-y: auto;
+        max-height: 150px; /* Limit max height to prevent overflow */
+    }
+    .chat-window .card-body {
+        flex: 1;
+        min-height: 0;
+    }
+</style>
+{% endblock %}
+
+
+{% block content %}
+<div class="talent-sourcing-container">
+    <!-- Left Column: Content Preview -->
+    <div class="col-md-7 content-preview">
+        <div class="card card-full-height">
+            <div class="card-header">
+                <h5><i class="bi bi-file-earmark-text me-2"></i>内容预览</h5>
+            </div>
+            <div class="card-body card-body-scrollable">
+                <p>这里是内容预览区，您可以放置简历、职位描述或其他相关信息。</p>
+                <br>
+                <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed non risus. Suspendisse lectus tortor, dignissim sit amet, adipiscing nec, ultricies sed, dolor. Cras elementum ultrices diam. Maecenas ligula massa, varius a, semper congue, euismod non, mi. Proin porttitor, orci nec nonummy molestie, enim est eleifend mi, non fermentum diam nisl sit amet erat. Duis semper. Duis arcu massa, scelerisque vitae, consequat in, pretium a, enim. Pellentesque congue. Ut in risus volutpat libero pharetra tempor. Cras vestibulum bibendum augue. Praesent egestas leo in pede. Praesent blandit odio eu enim. Pellentesque sed dui ut augue blandit sodales. Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Aliquam nibh. Mauris ac mauris sed pede pellentesque fermentum. Maecenas adipiscing ante non diam.           
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right Column: Chat Window -->
+    <div class="col-md-5 chat-window">
+        <div class="card card-full-height">
+            <div class="card-header">
+                <h5><i class="bi bi-chat-dots me-2"></i>智能猎头助理</h5>
+            </div>
+            <div class="card-body d-flex flex-column">
+                <div class="chat-messages">
+                    <div class="d-flex mb-3">
+                        <img src="{{ url_for('static', filename='images/assistant.png') }}" class="rounded-circle me-2" alt="Assistant" width="40" height="40">
+                        <div class="bg-light p-2 rounded">
+                            <p class="mb-0">您好！我是您的智能猎头助理。请问有什么可以帮助您的？</p>
+                            <small class="text-muted">刚刚</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="chat-input">
+                    <div class="input-group">
+                        <textarea class="form-control" rows="1" placeholder="在这里输入您的问题或指令..."></textarea>
+                        <button class="btn btn-primary" type="button">
+                            <i class="bi bi-send-fill"></i> 发送
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const chatMessages = document.querySelector('.chat-messages');
+        const chatInput = document.querySelector('.chat-input textarea');
+        const sendButton = document.querySelector('.chat-input button');
+        let chatHistory = []; // Array to store the history of the conversation
+
+        function adjustHeight() {
+            const navbarHeight = document.querySelector('.navbar').offsetHeight;
+            const footerHeight = document.querySelector('footer').offsetHeight;
+            const container = document.querySelector('.talent-sourcing-container');
+            if (container) {
+                // 2rem for margin (my-4)
+                container.style.height = `calc(100vh - ${navbarHeight}px - ${footerHeight}px - 2rem)`;
+            }
+        }
+
+        function autoGrowTextarea() {
+            chatInput.style.height = 'auto'; // Reset height to recalculate
+            chatInput.style.height = (chatInput.scrollHeight) + 'px'; // Set to content height
+        }
+
+        function addMessageToUI(sender, text, type = 'text') {
+            const messageElement = document.createElement('div');
+            
+            let iconSrc;
+            let altText;
+            const iconMarginClass = sender === 'user' ? 'ms-2' : 'me-2';
+
+            switch (sender) {
+                case 'user':
+                    iconSrc = `{{ url_for('static', filename='images/user.png') }}`;
+                    altText = 'User';
+                    break;
+                case 'planner':
+                    iconSrc = `{{ url_for('static', filename='images/planner.png') }}`;
+                    altText = 'Planner';
+                    break;
+                case 'executor':
+                    iconSrc = `{{ url_for('static', filename='images/executor.png') }}`;
+                    altText = 'Executor';
+                    break;
+                case 'observer':
+                    iconSrc = `{{ url_for('static', filename='images/observer.png') }}`;
+                    altText = 'Observer';
+                    break;
+                case 'hr':
+                    iconSrc = `{{ url_for('static', filename='images/HRagent.png') }}`;
+                    altText = 'HR';
+                    break;
+                default: // Fallback
+                    iconSrc = `{{ url_for('static', filename='images/assistant.png') }}`;
+                    altText = 'System';
+                    break;
+            }
+            const icon = `<img src="${iconSrc}" class="${iconMarginClass}" alt="${altText}" width="40" height="40">`;
+
+            let contentBlock = '';
+            if (type === 'html') {
+                contentBlock = `<div class="bg-light p-3 rounded">${text}</div>`;
+            } else {
+                const p = document.createElement('p');
+                p.className = 'mb-0';
+                p.innerText = text;
+                contentBlock = `<div class="bg-light p-3 rounded">${p.outerHTML}</div>`;
+            }
+
+            messageElement.className = `d-flex mb-3 ${sender === 'user' ? 'justify-content-end' : 'align-items-start'}`;
+            messageElement.innerHTML = sender === 'user' ? contentBlock.replace('bg-light', 'bg-primary text-white') + icon : icon + contentBlock;
+
+            chatMessages.appendChild(messageElement);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            return messageElement;
+        }
+
+        function renderAgentMessage(agent, data) {
+            let title, body;
+            let senderType = 'assistant'; // Default sender for system messages
+
+            switch(agent) {
+                case 'planner_output':
+                    senderType = 'planner';
+                    title = '📝 任务计划';
+                    const planSteps = data.plan.map(step => `<li><b>第${step.step}步:</b> ${step.task}</li>`).join('');
+                    body = `<ul>${planSteps}</ul>`;
+                    break;
+                case 'status_update':
+                    senderType = 'hr';
+                    title = '⚙️ 系统状态';
+                    body = `<p class="mb-0">${data.message}</p>`;
+                    break;
+                case 'executor_output':
+                    senderType = 'executor';
+                    title = `✅ 执行结果 (第${data.step}步)`;
+                    body = `<pre class="mb-0">${data.result}</pre>`;
+                    break;
+                case 'observer_output':
+                    senderType = 'observer';
+                    title = `🧐 观察员决策: <span class="badge bg-info">${data.decision.toUpperCase()}</span>`;
+                    body = `<p class="mb-0"><em>"${data.reasoning}"</em></p>`;
+                    if (data.feedback_to_executor) body += `<p class="mt-2 mb-0"><b>给执行器的反馈:</b> ${data.feedback_to_executor}</p>`;
+                    if (data.feedback_to_planner) body += `<p class="mt-2 mb-0"><b>给规划器的反馈:</b> ${data.feedback_to_planner}</p>`;
+                    break;
+                case 'final_result':
+                    senderType = 'hr';
+                    title = '🎉 最终结果';
+                    body = `<p class="mb-0">${data.message}</p><pre>${JSON.stringify(data.full_history, null, 2)}</pre>`;
+                    break;
+                case 'error':
+                    senderType = 'hr';
+                    title = '❌ 错误';
+                    body = `<p class="text-danger mb-0">${data.message}</p>`;
+                    break;
+                default:
+                    return;
+            }
+            const html = `<h6>${title}</h6>${body}`;
+            addMessageToUI(senderType, html, 'html');
+        }
+
+        async function handleSendMessage() {
+            const messageText = chatInput.value.trim();
+            if (!messageText) return;
+
+            addMessageToUI('user', messageText);
+            chatHistory.push({ role: 'user', content: messageText });
+            
+            chatInput.value = '';
+            setTimeout(autoGrowTextarea, 0); 
+            sendButton.disabled = true;
+
+            try {
+                const response = await fetch('/api/talent_sourcing/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: messageText, history: chatHistory.slice(0, -1) }) // Exclude current user message
+                });
+
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                
+                let buffer = '';
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n\n');
+                    buffer = lines.pop(); // Keep the last partial line
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const jsonString = line.substring(6);
+                                const parsedData = JSON.parse(jsonString);
+                                renderAgentMessage(parsedData.type, parsedData.data);
+                            } catch (e) {
+                                console.error("Failed to parse streamed JSON:", e, "Line:", line);
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                renderAgentMessage('error', { message: error.message });
+                console.error('Error fetching chat response:', error);
+            } finally {
+                sendButton.disabled = false;
+                chatInput.focus();
+            }
+        }
+
+        sendButton.addEventListener('click', handleSendMessage);
+        chatInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                handleSendMessage();
+            }
+        });
+
+        chatInput.addEventListener('input', autoGrowTextarea);
+
+        window.addEventListener('load', () => {
+            adjustHeight();
+            autoGrowTextarea(); // Initial size adjustment
+        });
+        window.addEventListener('resize', adjustHeight);
+    });
+</script>
+{% endblock %} 
