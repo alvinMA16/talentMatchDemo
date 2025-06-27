@@ -634,7 +634,19 @@ def resume_management():
 # JD管理页面
 @app.route('/jd')
 def jd_management():
-    return render_template('jd.html')
+    conn = get_db_connection()
+    jds_from_db = conn.execute('SELECT * FROM job_descriptions ORDER BY created_at DESC').fetchall()
+    conn.close()
+    job_descriptions = [dict(jd) for jd in jds_from_db]
+    
+    # Parse desensitized data for each JD
+    for jd in job_descriptions:
+        try:
+            jd['desensitized'] = json.loads(jd['desensitized_json']) if jd.get('desensitized_json') else None
+        except (json.JSONDecodeError, TypeError):
+            jd['desensitized'] = None
+    
+    return render_template('jd.html', job_descriptions=job_descriptions)
 
 # 人岗撮合页面
 @app.route('/facilitate')

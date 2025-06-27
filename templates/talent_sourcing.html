@@ -79,9 +79,9 @@
             <div class="card-body d-flex flex-column">
                 <div class="chat-messages">
                     <div class="d-flex mb-3">
-                        <img src="{{ url_for('static', filename='images/assistant.png') }}" class="rounded-circle me-2" alt="Assistant" width="40" height="40">
+                        <img src="{{ url_for('static', filename='images/HRagent.png') }}" class="me-2" alt="Assistant" width="40" height="40">
                         <div class="bg-light p-2 rounded">
-                            <p class="mb-0">您好！我是您的智能猎头助理。请问有什么可以帮助您的？</p>
+                            <p class="mb-0">您好！我是您的智能猎头助理。今天我们要从哪个岗位开始呢？</p>
                             <small class="text-muted">刚刚</small>
                         </div>
                     </div>
@@ -183,23 +183,23 @@
             switch(agent) {
                 case 'planner_output':
                     senderType = 'planner';
-                    title = '📝 任务计划';
+                    title = '📝 Planner 正在工作';
                     const planSteps = data.plan.map(step => `<li><b>第${step.step}步:</b> ${step.task}</li>`).join('');
                     body = `<ul>${planSteps}</ul>`;
                     break;
                 case 'status_update':
                     senderType = 'hr';
-                    title = '⚙️ 系统状态';
+                    title = '💬 Agent 状态';
                     body = `<p class="mb-0">${data.message}</p>`;
                     break;
                 case 'executor_output':
                     senderType = 'executor';
-                    title = `✅ 执行结果 (第${data.step}步)`;
+                    title = `🐴 executor 执行中... (第${data.step}步)`;
                     body = `<pre class="mb-0">${data.result}</pre>`;
                     break;
                 case 'observer_output':
                     senderType = 'observer';
-                    title = `🧐 观察员决策: <span class="badge bg-info">${data.decision.toUpperCase()}</span>`;
+                    title = `🧐 Observer 决策: <span class="badge bg-info">${data.decision.toUpperCase()}</span>`;
                     body = `<p class="mb-0"><em>"${data.reasoning}"</em></p>`;
                     if (data.feedback_to_executor) body += `<p class="mt-2 mb-0"><b>给执行器的反馈:</b> ${data.feedback_to_executor}</p>`;
                     if (data.feedback_to_planner) body += `<p class="mt-2 mb-0"><b>给规划器的反馈:</b> ${data.feedback_to_planner}</p>`;
