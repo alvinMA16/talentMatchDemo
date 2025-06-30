@@ -248,9 +248,92 @@ def find_jd_by_id_or_title(jd_id: int = None, title: str = None) -> str:
             return json.dumps({"status": "success", "data": jd_dict}, ensure_ascii=False, indent=2)
         else:
             log_processing_step("JD_TOOL_SEARCH", "COMPLETE", "未找到对应的JD。")
-            return json.dumps({"status": "not_found", "message": "未找到对应的职位描述。"})
+            return json.dumps({"status": "not_found", "message": "未找到匹配的职位描述。"})
+            
     except Exception as e:
-        log_processing_step("JD_TOOL_SEARCH", "ERROR", f"数据库查询JD时出错: {str(e)}")
-        return json.dumps({"status": "error", "message": f"数据库查询时发生错误: {str(e)}"})
+        log_processing_step("JD_TOOL_SEARCH", "ERROR", f"查询JD时发生错误: {str(e)}")
+        return json.dumps({"status": "error", "message": f"数据库查询失败: {str(e)}"})
+    finally:
+        conn.close()
+
+def list_all_resume_ids() -> str:
+    """
+    查询并返回数据库中所有简历的ID列表。
+    
+    Returns:
+        str: 一个JSON字符串，包含简历ID列表或错误信息。
+    """
+    log_processing_step("RESUME_TOOL_LIST", "START", "正在查询所有简历ID...")
+    conn = get_db_connection()
+    try:
+        resumes = conn.execute('SELECT id FROM resumes ORDER BY id').fetchall()
+        resume_ids = [row['id'] for row in resumes]
+        log_processing_step("RESUME_TOOL_LIST", "COMPLETE", f"成功找到 {len(resume_ids)} 份简历。")
+        return json.dumps({"status": "success", "data": {"resume_ids": resume_ids}})
+    except Exception as e:
+        log_processing_step("RESUME_TOOL_LIST", "ERROR", f"查询所有简历ID时出错: {str(e)}")
+        return json.dumps({"status": "error", "message": f"数据库查询失败: {str(e)}"})
+    finally:
+        conn.close()
+
+def get_resumes_by_ids(resume_ids: list[int]) -> str:
+    """
+    根据简历ID列表从数据库中查询完整的简历信息，并排除脱敏字段。
+    
+    Args:
+        resume_ids (list[int]): 简历的数据库ID列表。
+        
+    Returns:
+        str: 一个JSON字符串，包含一个简历信息对象的列表或错误信息。
+    """
+    if not resume_ids:
+        return json.dumps({"status": "error", "message": "必须提供简历ID列表。"})
+
+    log_processing_step("RESUME_TOOL_GET_BATCH", "START", f"正在批量查询简历: {resume_ids}")
+    conn = get_db_connection()
+    results = []
+    
+    try:
+        # 使用参数化查询来防止SQL注入
+        placeholders = ','.join('?' for _ in resume_ids)
+        query = f'SELECT * FROM resumes WHERE id IN ({placeholders})'
+        
+        resumes = conn.execute(query, resume_ids).fetchall()
+        
+        # 创建一个从id到resume的映射，以便保持顺序
+        resume_map = {resume['id']: resume for resume in resumes}
+        
+        for resume_id in resume_ids:
+            if resume_id in resume_map:
+                resume = resume_map[resume_id]
+                raw_dict = dict(resume)
+                resume_dict = {}
+                for key, value in raw_dict.items():
+                    if key.endswith('_json'):
+                        # 忽略脱敏字段
+                        if key == 'desensitized_json':
+                            continue
+                        
+                        field_name = key.replace('_json', '')
+                        if value:
+                            try:
+                                resume_dict[field_name] = json.loads(value)
+                            except json.JSONDecodeError:
+                                resume_dict[field_name] = f"Invalid JSON in DB: {value}"
+                        else:
+                            resume_dict[field_name] = [] # or some other default
+                    else:
+                        resume_dict[key] = value
+                
+                # 再次确保 desensitized_data (如果它作为普通列存在) 不在最终结果中
+                resume_dict.pop('desensitized_data', None)
+                results.append(resume_dict)
+        
+        log_processing_step("RESUME_TOOL_GET_BATCH", "COMPLETE", f"成功找到 {len(results)}/{len(resume_ids)} 份简历。")
+        return json.dumps({"status": "success", "data": results}, ensure_ascii=False, default=str)
+
+    except Exception as e:
+        log_processing_step("RESUME_TOOL_GET_BATCH", "ERROR", f"批量查询简历时发生错误: {str(e)}")
+        return json.dumps({"status": "error", "message": f"数据库查询失败: {str(e)}"})
     finally:
         conn.close() 

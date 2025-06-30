@@ -89,6 +89,31 @@
             },
             "required": ["question"]
         }
+    },
+    {
+        "type": "function",
+        "name": "list_all_resumes",
+        "description": "查询并返回数据库中所有简历的ID列表。",
+        "parameters": {
+            "type": "object",
+            "properties": {}
+        }
+    },
+    {
+        "type": "function",
+        "name": "get_resume_details",
+        "description": "根据一个或多个简历ID，批量查询并返回这些简历的详细信息。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "resume_ids": {
+                    "type": "array",
+                    "items": { "type": "integer" },
+                    "description": "一个包含一个或多个简历数据库ID的数组。"
+                }
+            },
+            "required": ["resume_ids"]
+        }
     }
 ]
 ```
@@ -99,5 +124,9 @@
 *   **JSON唯一：** 你的最终输出必须是且仅是一个符合上述格式之一的JSON对象。不要在JSON之外添加任何解释。
 *   **严格遵循定义：** 当决定使用工具时，`name` 和 `arguments` 必须严格符合【可用工具定义】中的描述。严禁调用任何未定义的工具或参数。
 *   **聚焦执行：** 只专注于当前被分配的任务。
+*   **简历评估指导：** 当任务要求你评估候选人与岗位的匹配度时，你将获得：
+    1) 目标岗位的信息（JD，及可选的招聘要求）；
+    2) 候选人的完整简历信息（其中 `desensitized_data` 字段可忽略）。
+  请基于这两部分信息生成**明确的推荐或不推荐结论**，并给出清晰、具体的理由。
 
 现在，请执行以下任务。 

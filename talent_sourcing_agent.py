@@ -2,7 +2,7 @@ import os
 import json
 from flask import Blueprint, request, Response, stream_with_context
 from openai import OpenAI
-from helpers import get_prompt, log_model_request, log_model_response, log_processing_step, find_jd_by_id_or_title
+from helpers import get_prompt, log_model_request, log_model_response, log_processing_step, find_jd_by_id_or_title, list_all_resume_ids, get_resumes_by_ids
 import time
 
 # Create a Blueprint
@@ -51,6 +51,11 @@ def execute_tool(tool_name: str, parameters: dict) -> str:
         jd_id = parameters.get("jd_id")
         title = parameters.get("title")
         return find_jd_by_id_or_title(jd_id=jd_id, title=title)
+    elif tool_name == "list_all_resumes":
+        return list_all_resume_ids()
+    elif tool_name == "get_resume_details":
+        resume_ids = parameters.get("resume_ids", [])
+        return get_resumes_by_ids(resume_ids=resume_ids)
     elif tool_name == "show_preview":
         # This tool doesn't return data to the agent, it streams an event to the frontend.
         # The content is passed directly. The return value signals success to the agent.
