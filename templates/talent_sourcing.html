@@ -61,7 +61,7 @@
             <div class="card-header">
                 <h5><i class="bi bi-file-earmark-text me-2"></i>内容预览</h5>
             </div>
-            <div class="card-body card-body-scrollable">
+            <div class="card-body card-body-scrollable" id="content-preview-body">
                 <p>这里是内容预览区，您可以放置简历、职位描述或其他相关信息。</p>
                 <br>
                 <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed non risus. Suspendisse lectus tortor, dignissim sit amet, adipiscing nec, ultricies sed, dolor. Cras elementum ultrices diam. Maecenas ligula massa, varius a, semper congue, euismod non, mi. Proin porttitor, orci nec nonummy molestie, enim est eleifend mi, non fermentum diam nisl sit amet erat. Duis semper. Duis arcu massa, scelerisque vitae, consequat in, pretium a, enim. Pellentesque congue. Ut in risus volutpat libero pharetra tempor. Cras vestibulum bibendum augue. Praesent egestas leo in pede. Praesent blandit odio eu enim. Pellentesque sed dui ut augue blandit sodales. Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Aliquam nibh. Mauris ac mauris sed pede pellentesque fermentum. Maecenas adipiscing ante non diam.           
@@ -106,8 +106,9 @@
         const chatMessages = document.querySelector('.chat-messages');
         const chatInput = document.querySelector('.chat-input textarea');
         const sendButton = document.querySelector('.chat-input button');
-        let chatHistory = []; // Array to store the history of the conversation
-        let abortController = null; // To control fetch request
+        let chatHistory = [];
+        let abortController = null;
+        let agentState = null; // To hold state for multi-turn conversations
 
         function adjustHeight() {
             const navbarHeight = document.querySelector('.navbar').offsetHeight;
@@ -145,6 +146,7 @@
         function handleTerminate() {
             if (abortController) {
                 abortController.abort();
+                agentState = null; // Reset state on termination
             }
         }
 
@@ -205,6 +207,23 @@
             let title, body;
             let senderType = 'hr'; // Default sender for system messages
 
+            if (agent === 'show_preview') {
+                const previewBody = document.getElementById('content-preview-body');
+                if (previewBody) {
+                    previewBody.innerHTML = data.html_content;
+                }
+                // We also show a small notification in the chat window
+                agent = 'status_update';
+                data = { message: '内容已更新到左侧预览区。' };
+            }
+
+            if (agent === 'user_feedback_request') {
+                agentState = data.agent_state; // <-- Store the received agent state
+                addMessageToUI('hr', data.question, 'text');
+                changeButtonToSendState();
+                return true; // Signal to the caller that we are pausing for user input
+            }
+
             switch(agent) {
                 case 'planner_output':
                     senderType = 'planner';
@@ -214,7 +233,7 @@
                     break;
                 case 'status_update':
                     senderType = 'hr';
-                    title = '💬 Agent 状态';
+                    title = '💬 Agent 消息';
                     body = `<p class="mb-0">${data.message}</p>`;
                     break;
                 case 'tool_call':
@@ -247,6 +266,7 @@
                     senderType = 'hr';
                     title = '🎉 最终结果';
                     body = `<p class="mb-0">${data.message}</p><pre>${JSON.stringify(data.full_history, null, 2)}</pre>`;
+                    agentState = null; // Reset state on final result
                     break;
                 case 'error':
                     senderType = 'hr';
@@ -271,15 +291,24 @@
             setTimeout(autoGrowTextarea, 0); 
             
             changeButtonToTerminateState();
+
             abortController = new AbortController();
+            let pausedForUser = false;
 
             try {
                 const response = await fetch('/api/talent_sourcing/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message: messageText, history: chatHistory.slice(0, -1) }), // Exclude current user message
+                    body: JSON.stringify({ 
+                        message: messageText, 
+                        history: chatHistory.slice(0, -1),
+                        agent_state: agentState 
+                    }),
                     signal: abortController.signal
                 });
+
+                // After request is sent, reset state for the next independent interaction
+                agentState = null; 
 
                 if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 
@@ -300,7 +329,13 @@
                             try {
                                 const jsonString = line.substring(6);
                                 const parsedData = JSON.parse(jsonString);
-                                renderAgentMessage(parsedData.type, parsedData.data);
+                                const wasPaused = renderAgentMessage(parsedData.type, parsedData.data);
+                                if (wasPaused) {
+                                    pausedForUser = true;
+                                    // Stop processing further events in this chunk
+                                    // and effectively prepare to end the stream reading.
+                                    return;
+                                }
                             } catch (e) {
                                 console.error("Failed to parse streamed JSON:", e, "Line:", line);
                             }
@@ -315,26 +350,23 @@
                 }
                 console.error('Chat process error:', error);
             } finally {
-                changeButtonToSendState();
+                if (!pausedForUser) {
+                    changeButtonToSendState();
+                }
                 chatInput.focus();
             }
         }
 
-        sendButton.onclick = handleSendMessage;
-        chatInput.addEventListener('keydown', (event) => {
+        chatInput.addEventListener('input', autoGrowTextarea);
+        chatInput.addEventListener('keydown', function(event) {
             if (!chatInput.disabled && event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
                 handleSendMessage();
             }
         });
-
-        chatInput.addEventListener('input', autoGrowTextarea);
-
-        window.addEventListener('load', () => {
-            adjustHeight();
-            autoGrowTextarea(); // Initial size adjustment
-        });
+        sendButton.addEventListener('click', handleSendMessage);
         window.addEventListener('resize', adjustHeight);
+        adjustHeight(); // Initial call
     });
 </script>
 {% endblock %} 
